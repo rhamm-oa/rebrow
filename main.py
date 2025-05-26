@@ -89,21 +89,37 @@ def process_image(image):
             st.error("Could not detect eyebrows. Please upload another image.")
             return None
     
-    # Create eyebrow masks
-    left_mask, left_bbox = eyebrow_segmentation.create_eyebrow_mask(face_crop, left_eyebrow)
-    right_mask, right_bbox = eyebrow_segmentation.create_eyebrow_mask(face_crop, right_eyebrow)
+    # Initialize face parsing visualization variables
+    # These will be used only in the Face Parsing tab
+    # We'll create temporary variables and add them to the results dictionary later
+    face_parsing_success = False
+    face_parsing_visualization = None
+    face_parsing_masks = {}
     
-    # Refine masks
-    left_refined_mask = eyebrow_segmentation.refine_eyebrow_mask(face_crop, left_mask)
-    right_refined_mask = eyebrow_segmentation.refine_eyebrow_mask(face_crop, right_mask)
+    # We'll skip the face parsing for now since it's causing issues
+    # The traditional eyebrow segmentation will be used for analysis
+    
+    # For eyebrow segmentation and analysis, use the traditional method
+    # This ensures consistent results for color and shape analysis
+    try:
+        # Create eyebrow masks using traditional method
+        left_mask, left_bbox = eyebrow_segmentation.create_eyebrow_mask(face_crop, left_eyebrow)
+        right_mask, right_bbox = eyebrow_segmentation.create_eyebrow_mask(face_crop, right_eyebrow)
+        
+        # Refine masks
+        left_refined_mask = eyebrow_segmentation.refine_eyebrow_mask(face_crop, left_mask)
+        right_refined_mask = eyebrow_segmentation.refine_eyebrow_mask(face_crop, right_mask)
+    except Exception as e:
+        st.error(f"Eyebrow segmentation failed: {e}")
+        return None
     
     # Get cropped masks
     left_cropped_mask = eyebrow_segmentation.get_cropped_mask(left_refined_mask, left_bbox)
     right_cropped_mask = eyebrow_segmentation.get_cropped_mask(right_refined_mask, right_bbox)
     
     # Extract eyebrow regions
-    left_eyebrow_region, left_roi_mask = eyebrow_segmentation.extract_eyebrow_region(face_crop, left_refined_mask, left_bbox) # type: ignore
-    right_eyebrow_region, right_roi_mask = eyebrow_segmentation.extract_eyebrow_region(face_crop, right_refined_mask, right_bbox) # type: ignore
+    left_eyebrow_region, left_roi_mask = eyebrow_segmentation.extract_eyebrow_region(face_crop, left_refined_mask, left_bbox)
+    right_eyebrow_region, right_roi_mask = eyebrow_segmentation.extract_eyebrow_region(face_crop, right_refined_mask, right_bbox)
     
     # Create alpha matting with cropping
     left_alpha, left_alpha_mask = eyebrow_segmentation.alpha_matting(face_crop, left_refined_mask, left_bbox)
@@ -147,7 +163,7 @@ def process_image(image):
     eyebrow_landmarks_image = face_detector.draw_eyebrow_landmarks(face_crop, left_eyebrow, right_eyebrow)
     
     # Return all processed data
-    return {
+    results = {
         'original_image': image,
         'face_crop': face_crop,
         'landmarks_image': landmarks_image,
@@ -155,6 +171,9 @@ def process_image(image):
         'eyebrow_landmarks_image': eyebrow_landmarks_image,
         'left_eyebrow': left_eyebrow,
         'right_eyebrow': right_eyebrow,
+        'face_parsing_visualization': face_parsing_visualization,
+        'face_parsing_masks': face_parsing_masks,
+        'face_parsing_success': face_parsing_success,
         'left_mask': left_refined_mask,
         'right_mask': right_refined_mask,
         'left_cropped_mask': left_cropped_mask,
@@ -178,8 +197,15 @@ def process_image(image):
         'left_shape_vis': left_shape_vis,
         'right_shape_vis': right_shape_vis,
         'left_shape_desc': left_shape_desc,
-        'right_shape_desc': right_shape_desc
+        'right_shape_desc': right_shape_desc,
+        'left_refined_mask': left_refined_mask,
+        'right_refined_mask': right_refined_mask
     }
+    
+    # Face parsing results are already added to the results dictionary
+    # No need to check for them here
+        
+    return results
 
 # File uploader
 uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
@@ -196,7 +222,8 @@ if uploaded_file is not None:
     
     if results:
         # Create tabs for different analyses
-        tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Color Analysis", "Shape Analysis", "Detailed View"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Color Analysis", "Shape Analysis", "Deep Segmentation (BiSeNet)", "Detailed View"])
+        
         
         with tab1:
             # Overview tab
@@ -324,6 +351,113 @@ if uploaded_file is not None:
                     st.markdown(f"- Convexity: {results['right_shape_info']['convexity']:.2f}")
         
         with tab4:
+            # Deep Eyebrow Segmentation (BiSeNet) tab
+            st.header("Deep Eyebrow Segmentation (BiSeNet)")
+            st.markdown("""
+                This tab uses a deep neural network (BiSeNet) for state-of-the-art eyebrow segmentation. Results are robust for all skin tones and lighting conditions.
+            """)
+            # Create a placeholder for status messages
+            status_placeholder = st.empty()
+            status_placeholder.info("Preparing to run BiSeNet segmentation...")
+            
+            try:
+                from bisenet_integration import segment_eyebrows_with_bisenet, create_eyebrow_overlay
+                import tempfile
+                
+                # Save cropped face image to a temp file
+                cropped_face = results.get('face_crop', None)
+                if cropped_face is None:
+                    st.error('No cropped face available. Cannot run BiSeNet segmentation.')
+                    st.stop()
+                
+                # Create a temporary file for the cropped face
+                tmp_img_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_img:
+                        status_placeholder.info("Saving temporary image for processing...")
+                        cv2.imwrite(tmp_img.name, cropped_face)
+                        tmp_img_path = tmp_img.name
+                        status_placeholder.info(f"Temporary image saved at: {tmp_img_path}")
+                except Exception as e:
+                    st.error(f"Failed to create temporary file: {e}")
+                    st.stop()
+                
+                # Show a spinner while processing
+                with st.spinner('Running BiSeNet segmentation...'):
+                    status_placeholder.info("Running BiSeNet segmentation - this may take a moment...")
+                    
+                    # Run BiSeNet segmentation using the simplified function
+                    segmentation_image = segment_eyebrows_with_bisenet(tmp_img_path, target_shape=cropped_face.shape)
+                    status_placeholder.success(f"BiSeNet segmentation completed successfully!")
+                    
+                    # Clean up the temporary file
+                    if tmp_img_path and os.path.exists(tmp_img_path):
+                        os.remove(tmp_img_path)
+                
+                # Display information about the segmentation image
+                status_placeholder.info(f"Segmentation image shape: {segmentation_image.shape}, dtype: {segmentation_image.dtype}")
+                
+                # Display the original image and segmentation side by side
+                st.subheader("Original Image vs BiSeNet Segmentation")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.image(cropped_face, channels="BGR", caption="Original Image")
+                with col2:
+                    st.image(segmentation_image, channels="BGR", caption="BiSeNet Face Parsing Result")
+                
+                # Extract and display just the eyebrow segmentation
+                st.subheader("Eyebrow Segmentation Only")
+                
+                # Create a mask for eyebrows based on their color in the segmentation
+                # The colors are from the BiSeNet color mapping
+                eyebrow_mask = np.zeros_like(segmentation_image)
+                
+                # Define the eyebrow colors from BiSeNet (BGR format)
+                left_eyebrow_color = np.array([0, 170, 255])  # Orange (left eyebrow)
+                right_eyebrow_color = np.array([85, 0, 255])  # Pink (right eyebrow)
+                
+                # Create masks for each eyebrow by color matching
+                # Allow some tolerance in color matching
+                tolerance = 30
+                left_mask = np.all(np.abs(segmentation_image - left_eyebrow_color) < tolerance, axis=2)
+                right_mask = np.all(np.abs(segmentation_image - right_eyebrow_color) < tolerance, axis=2)
+                
+                # Apply the masks to create eyebrow-only image
+                eyebrow_mask[left_mask] = left_eyebrow_color
+                eyebrow_mask[right_mask] = right_eyebrow_color
+                
+                # Create a blended image for visualization
+                eyebrow_overlay = cropped_face.copy()
+                # Only apply where eyebrow mask is non-zero
+                eyebrow_pixels = np.any(eyebrow_mask > 0, axis=2) # type: ignore
+                eyebrow_overlay[eyebrow_pixels] = eyebrow_mask[eyebrow_pixels]
+                
+                # Display eyebrow segmentation results side by side
+                col3, col4 = st.columns(2)
+                with col3:
+                    st.image(eyebrow_mask, channels="BGR", caption="Eyebrows Only (Mask)")
+                with col4:
+                    st.image(eyebrow_overlay, channels="BGR", caption="Eyebrows Overlay on Face")
+                
+                # Display explanation
+                st.markdown("""
+                ### Understanding the Face Parsing Result
+                
+                The image above shows the BiSeNet face parsing result with different colors representing different facial features:
+                - **Orange**: Left eyebrow (index 6)
+                - **Pink**: Right eyebrow (index 7)
+                - **Blue**: Face/skin
+                - **Green**: Eyes
+                - **Red**: Lips/mouth
+                
+                This visualization shows the raw output from the BiSeNet model without any post-processing.
+                """)
+                
+                # No debug image is saved to disk to prevent memory issues
+            except Exception as e:
+                st.error(f"BiSeNet segmentation failed: {e}\nMake sure bisenet_integration.py, face-parsing, and weights are properly set up.")
+        
+        with tab5:
             # Detailed View tab
             st.header("Detailed View")
             
@@ -352,6 +486,10 @@ if uploaded_file is not None:
                 st.markdown("Right Eyebrow Alpha Matte")
                 if results['right_alpha'] is not None:
                     st.image(cv2_to_pil(results['right_alpha']), use_column_width=True) # type: ignore
+
+
+
+
 
 # Add information about the app
 st.sidebar.title("About")
