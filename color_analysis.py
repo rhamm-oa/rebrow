@@ -9,7 +9,7 @@ class ColorAnalysis:
     def __init__(self):
         pass
     
-    def extract_dominant_colors(self, image, mask, n_colors=2):
+    def extract_dominant_colors(self, image, mask, n_colors=3):
         """Extract dominant colors from the masked region using KMeans clustering"""
         if mask is None or np.sum(mask) == 0:
             return None, None
