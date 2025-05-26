@@ -102,8 +102,8 @@ def process_image(image):
     right_cropped_mask = eyebrow_segmentation.get_cropped_mask(right_refined_mask, right_bbox)
     
     # Extract eyebrow regions
-    left_eyebrow_region, left_roi_mask = eyebrow_segmentation.extract_eyebrow_region(face_crop, left_refined_mask, left_bbox)
-    right_eyebrow_region, right_roi_mask = eyebrow_segmentation.extract_eyebrow_region(face_crop, right_refined_mask, right_bbox)
+    left_eyebrow_region, left_roi_mask = eyebrow_segmentation.extract_eyebrow_region(face_crop, left_refined_mask, left_bbox) # type: ignore
+    right_eyebrow_region, right_roi_mask = eyebrow_segmentation.extract_eyebrow_region(face_crop, right_refined_mask, right_bbox) # type: ignore
     
     # Create alpha matting with cropping
     left_alpha, left_alpha_mask = eyebrow_segmentation.alpha_matting(face_crop, left_refined_mask, left_bbox)
