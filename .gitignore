@@ -2,4 +2,4 @@ all_frontal
 rebrowenv
 data 
 __pycache__/
-face-parsing
+face-parsing/
