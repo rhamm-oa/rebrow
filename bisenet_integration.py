@@ -24,11 +24,11 @@ def run_bisenet_direct(image_path):
     """
     # Get the directory where this script is located
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    
+    MODEL_NAME="resnet18"
     # Define paths exactly as in the user's command
     face_parsing_dir = os.path.join(current_dir, 'face-parsing')
     inference_script = os.path.join(face_parsing_dir, 'inference.py')
-    weight_path = os.path.join(face_parsing_dir, 'weights', 'resnet18.pt')
+    weight_path = os.path.join(face_parsing_dir, 'weights', f"{MODEL_NAME}" + '.pt')
     
     # Create a temporary directory for input and output
     temp_dir = tempfile.mkdtemp()
@@ -50,7 +50,7 @@ def run_bisenet_direct(image_path):
     # Run the exact command the user provided
     cmd = [
         'python', inference_script,
-        '--model', 'resnet18',
+        '--model', MODEL_NAME,
         '--weight', weight_path,
         '--input', temp_input_dir,
         '--output', temp_output_dir
