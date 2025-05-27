@@ -125,7 +125,10 @@ def process_image(image):
     left_alpha, left_alpha_mask = eyebrow_segmentation.alpha_matting(face_crop, left_refined_mask, left_bbox)
     right_alpha, right_alpha_mask = eyebrow_segmentation.alpha_matting(face_crop, right_refined_mask, right_bbox)
     
-    # Extract dominant colors
+    # Check if BiSeNet masks are available (they will be populated later in the BiSeNet tab)
+    bisenet_masks_available = False
+    
+    # Extract dominant colors using traditional masks initially
     left_colors, left_percentages = color_analyzer.extract_dominant_colors(face_crop, left_refined_mask)
     right_colors, right_percentages = color_analyzer.extract_dominant_colors(face_crop, right_refined_mask)
     
@@ -233,80 +236,191 @@ if uploaded_file is not None:
             
             with col1:
                 st.subheader("Original Image")
-                st.image(cv2_to_pil(results['original_image']), use_column_width=True) # type: ignore
+                original_image_pil = cv2_to_pil(results['original_image'])
+                if original_image_pil is not None:
+                    st.image(original_image_pil, use_column_width=True)
             
             with col2:
                 st.subheader("Face Detection")
-                st.image(cv2_to_pil(results['face_crop']), use_column_width=True) # type: ignore
+                face_crop_pil = cv2_to_pil(results['face_crop'])
+                if face_crop_pil is not None:
+                    st.image(face_crop_pil, use_column_width=True)
             
             col3, col4 = st.columns(2)
             
             with col3:
                 st.subheader("Facial Landmarks (Full Image)")
-                st.image(cv2_to_pil(results['landmarks_image']), use_column_width=True) # type: ignore
+                landmarks_image_pil = cv2_to_pil(results['landmarks_image'])
+                if landmarks_image_pil is not None:
+                    st.image(landmarks_image_pil, use_column_width=True)
                 
                 st.subheader("Facial Landmarks (Cropped Face)")
-                st.image(cv2_to_pil(results['cropped_landmarks_image']), use_column_width=True) # type: ignore
+                cropped_landmarks_image_pil = cv2_to_pil(results['cropped_landmarks_image'])
+                if cropped_landmarks_image_pil is not None:
+                    st.image(cropped_landmarks_image_pil, use_column_width=True)
             
             with col4:
                 st.subheader("Eyebrow Landmarks")
-                st.image(cv2_to_pil(results['eyebrow_landmarks_image']), use_column_width=True) # type: ignore
-        
+                eyebrow_landmarks_image_pil = cv2_to_pil(results['eyebrow_landmarks_image'])
+                if eyebrow_landmarks_image_pil is not None:
+                    st.image(eyebrow_landmarks_image_pil, use_column_width=True)
         with tab2:
             # Color Analysis tab
             st.header("Color Analysis")
             
+
+            
+            # Check if BiSeNet results are available
+            bisenet_available = 'bisenet_left_mask' in results and 'bisenet_right_mask' in results
+            
+            # Add a toggle to switch between traditional and BiSeNet color analysis
+            use_bisenet = False
+            if bisenet_available:
+                use_bisenet = st.checkbox("Use BiSeNet segmentation for color analysis", value=True, 
+                                         help="Toggle to switch between traditional and BiSeNet-based color analysis")
+            
+            # Select the appropriate data based on the toggle
+            if use_bisenet and bisenet_available:
+                left_mask_display = results['bisenet_left_mask']
+                right_mask_display = results['bisenet_right_mask']
+                left_palette_display = results['bisenet_left_palette']
+                right_palette_display = results['bisenet_right_palette']
+                left_color_info_display = results['bisenet_left_color_info']
+                right_color_info_display = results['bisenet_right_color_info']
+                left_color_props = color_analyzer.analyze_color_properties(results['bisenet_left_colors']) if 'bisenet_left_colors' in results else []
+                right_color_props = color_analyzer.analyze_color_properties(results['bisenet_right_colors']) if 'bisenet_right_colors' in results else []
+                st.success("Using BiSeNet segmentation for more accurate color analysis")
+            else:
+                left_mask_display = results['left_refined_mask']
+                right_mask_display = results['right_refined_mask']
+                left_palette_display = results['left_palette']
+                right_palette_display = results['right_palette']
+                left_color_info_display = results['left_color_info']
+                right_color_info_display = results['right_color_info']
+                left_color_props = results['left_color_properties'] if 'left_color_properties' in results else []
+                right_color_props = results['right_color_properties'] if 'right_color_properties' in results else []
+                if bisenet_available:
+                    st.info("Using traditional segmentation for color analysis")
+            
+            # Create combined mask for visualization
+            combined_mask = None
+            if left_mask_display is not None and right_mask_display is not None:
+                combined_mask = cv2.bitwise_or(left_mask_display, right_mask_display)
+                
+                # Show combined mask
+                st.subheader("Combined Eyebrow Mask")
+                
+                # Show original and masked images side by side
+                col_orig, col_mask = st.columns(2)
+                with col_orig:
+                    st.subheader("Original Image")
+                    st.image(cv2_to_pil(results['face_crop']) or Image.new('RGB', (100, 100)), use_column_width=True)
+                
+                with col_mask:
+                    st.subheader("Combined Mask")
+                    # Apply combined mask to original image
+                    if combined_mask is not None:
+                        masked_combined = cv2.bitwise_and(results['face_crop'], results['face_crop'], mask=combined_mask)
+                        st.image(cv2_to_pil(masked_combined) or Image.new('RGB', (100, 100)), use_column_width=True)
+            
+            # Display eyebrow regions and color palettes
             col1, col2 = st.columns(2)
             
+            # Right eyebrow of the person (appears on left side of the screen)
             with col1:
-                st.subheader("Left Eyebrow")
-                st.image(cv2_to_pil(results['left_eyebrow_region']), use_column_width=True) # type: ignore
+                st.subheader("Right Eyebrow of Person")
                 
-                if results['left_palette'] is not None:
-                    st.subheader("Dominant Colors")
-                    st.image(cv2_to_pil(results['left_palette']), use_column_width=True) # type: ignore
-                    
-                    st.subheader("Color Information")
-                    for i, color_info in enumerate(results['left_color_info']):
-                        st.markdown(f"**Color {i+1}**: {color_info['percentage']}")
-                        st.markdown(f"RGB: {color_info['rgb']}, HEX: `{color_info['hex']}`")
-                        st.markdown(f"LAB: {color_info['lab']}")
-                        st.markdown(f"LCH: {color_info['lch']}")
-                        st.markdown(f"HSV: {color_info['hsv']}")
-                        st.markdown(f"<div style='background-color: {color_info['hex']}; width: 100%; height: 20px;'></div>", unsafe_allow_html=True)
-                    
-                    st.subheader("Color Properties")
-                    for i, properties in enumerate(results['left_color_properties']):
-                        st.markdown(f"**Color {i+1}**:")
-                        st.markdown(f"- Brightness: {properties['brightness']}")
-                        st.markdown(f"- Saturation: {properties['saturation']}")
-                        st.markdown(f"- Intensity: {properties['intensity']}")
-                        st.markdown(f"- Tone: {properties['tone']}")
+                # Show original and masked images side by side
+                col_orig_right, col_mask_right = st.columns(2)
+                
+                with col_orig_right:
+                    st.subheader("Original")
+                    # Show the original image
+                    orig_right_pil = cv2_to_pil(results['face_crop'])
+                    if orig_right_pil is not None:
+                        st.image(orig_right_pil, use_column_width=True)
+                
+                with col_mask_right:
+                    st.subheader("Mask")
+                    # Display the mask applied to the original image
+                    if right_mask_display is not None:
+                        # Apply mask to original image for better visualization
+                        masked_right = cv2.bitwise_and(results['face_crop'], results['face_crop'], mask=right_mask_display)
+                        masked_right_pil = cv2_to_pil(masked_right)
+                        if masked_right_pil is not None:
+                            st.image(masked_right_pil, use_column_width=True)
+                
+                st.subheader("Dominant Colors")
+                if right_palette_display is not None:
+                    st.image(right_palette_display, channels="BGR")
+                
+                st.subheader("Color Information")
+                if right_color_info_display:
+                    for i, color_info in enumerate(right_color_info_display):
+                        st.write(f"Color {i+1}: {color_info['percentage']}")
+                        st.write(f"RGB: {color_info['rgb']}, HEX: {color_info['hex']}")
+                        st.write(f"LAB: {color_info['lab']}")
+                        st.write(f"LCH: {color_info['lch']}")
+                        st.write(f"HSV: {color_info['hsv']}")
+                        # Create a color swatch using HTML
+                        st.markdown(f"<div style='background-color: {color_info['hex']}; width: 100%; height: 30px; margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+                        
+                        # Add color properties directly under each color
+                        if right_color_props and i < len(right_color_props):
+                            st.markdown("**Color Properties:**")
+                            st.markdown(f"- Brightness: {right_color_props[i]['brightness']}")
+                            st.markdown(f"- Saturation: {right_color_props[i]['saturation']}")
+                            st.markdown(f"- Intensity: {right_color_props[i]['intensity']}")
+                            st.markdown(f"- Tone: {right_color_props[i]['tone']}")
+                            st.markdown("---")
             
+            # Left eyebrow of the person (appears on right side of the screen)
             with col2:
-                st.subheader("Right Eyebrow")
-                st.image(cv2_to_pil(results['right_eyebrow_region']), use_column_width=True) # type: ignore
+                st.subheader("Left Eyebrow of Person")
                 
-                if results['right_palette'] is not None:
-                    st.subheader("Dominant Colors")
-                    st.image(cv2_to_pil(results['right_palette']), use_column_width=True) # type: ignore
-                    
-                    st.subheader("Color Information")
-                    for i, color_info in enumerate(results['right_color_info']):
-                        st.markdown(f"**Color {i+1}**: {color_info['percentage']}")
-                        st.markdown(f"RGB: {color_info['rgb']}, HEX: `{color_info['hex']}`")
-                        st.markdown(f"LAB: {color_info['lab']}")
-                        st.markdown(f"LCH: {color_info['lch']}")
-                        st.markdown(f"HSV: {color_info['hsv']}")
-                        st.markdown(f"<div style='background-color: {color_info['hex']}; width: 100%; height: 20px;'></div>", unsafe_allow_html=True)
-                    
-                    st.subheader("Color Properties")
-                    for i, properties in enumerate(results['right_color_properties']):
-                        st.markdown(f"**Color {i+1}**:")
-                        st.markdown(f"- Brightness: {properties['brightness']}")
-                        st.markdown(f"- Saturation: {properties['saturation']}")
-                        st.markdown(f"- Intensity: {properties['intensity']}")
-                        st.markdown(f"- Tone: {properties['tone']}")
+                # Show original and masked images side by side
+                col_orig_left, col_mask_left = st.columns(2)
+                
+                with col_orig_left:
+                    st.subheader("Original")
+                    # Show the original image
+                    orig_left_pil = cv2_to_pil(results['face_crop'])
+                    if orig_left_pil is not None:
+                        st.image(orig_left_pil, use_column_width=True)
+                
+                with col_mask_left:
+                    st.subheader("Mask")
+                    # Display the mask applied to the original image
+                    if left_mask_display is not None:
+                        # Apply mask to original image for better visualization
+                        masked_left = cv2.bitwise_and(results['face_crop'], results['face_crop'], mask=left_mask_display)
+                        masked_left_pil = cv2_to_pil(masked_left)
+                        if masked_left_pil is not None:
+                            st.image(masked_left_pil, use_column_width=True)
+                
+                st.subheader("Dominant Colors")
+                if left_palette_display is not None:
+                    st.image(left_palette_display, channels="BGR")
+                
+                st.subheader("Color Information")
+                if left_color_info_display:
+                    for i, color_info in enumerate(left_color_info_display):
+                        st.write(f"Color {i+1}: {color_info['percentage']}")
+                        st.write(f"RGB: {color_info['rgb']}, HEX: {color_info['hex']}")
+                        st.write(f"LAB: {color_info['lab']}")
+                        st.write(f"LCH: {color_info['lch']}")
+                        st.write(f"HSV: {color_info['hsv']}")
+                        # Create a color swatch using HTML
+                        st.markdown(f"<div style='background-color: {color_info['hex']}; width: 100%; height: 30px; margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+                        
+                        # Add color properties directly under each color
+                        if left_color_props and i < len(left_color_props):
+                            st.markdown("**Color Properties:**")
+                            st.markdown(f"- Brightness: {left_color_props[i]['brightness']}")
+                            st.markdown(f"- Saturation: {left_color_props[i]['saturation']}")
+                            st.markdown(f"- Intensity: {left_color_props[i]['intensity']}")
+                            st.markdown(f"- Tone: {left_color_props[i]['tone']}")
+                            st.markdown("---")
         
         with tab3:
             # Shape Analysis tab
@@ -316,7 +430,9 @@ if uploaded_file is not None:
             
             with col1:
                 st.subheader("Left Eyebrow Shape")
-                st.image(cv2_to_pil(results['left_shape_vis']), use_column_width=True) # type: ignore
+                left_shape_vis_pil = cv2_to_pil(results['left_shape_vis'])
+                if left_shape_vis_pil is not None:
+                    st.image(left_shape_vis_pil, use_column_width=True)
                 
                 if results['left_shape_info']:
                     st.subheader("Shape Description")
@@ -334,7 +450,9 @@ if uploaded_file is not None:
             
             with col2:
                 st.subheader("Right Eyebrow Shape")
-                st.image(cv2_to_pil(results['right_shape_vis']), use_column_width=True) # type: ignore
+                right_shape_vis_pil = cv2_to_pil(results['right_shape_vis'])
+                if right_shape_vis_pil is not None:
+                    st.image(right_shape_vis_pil, use_column_width=True)
                 
                 if results['right_shape_info']:
                     st.subheader("Shape Description")
@@ -398,6 +516,22 @@ if uploaded_file is not None:
                 status_placeholder.info(f"Segmentation image shape: {segmentation_image.shape}, dtype: {segmentation_image.dtype}")
                 status_placeholder.info(f"Raw segmentation shape: {raw_segmentation.shape}, dtype: {raw_segmentation.dtype}")
                 
+                # Store the raw segmentation for visualization
+                results['bisenet_segmentation_image'] = segmentation_image
+                results['bisenet_raw_segmentation'] = raw_segmentation
+                
+                # Create a more visually appealing segmentation visualization using the common approach
+                from bisenet_integration import visualize_segmentation, extract_eyebrows_common_approach
+                
+                # Create enhanced visualization using the common approach from face-parsing/utils
+                blended_visualization, eyebrow_mask = extract_eyebrows_common_approach(raw_segmentation, cropped_face)
+                results['bisenet_enhanced_visualization'] = blended_visualization
+                results['bisenet_eyebrow_mask'] = eyebrow_mask
+                
+                # Also create a standard visualization for comparison
+                standard_visualization = visualize_segmentation(raw_segmentation)
+                results['bisenet_standard_visualization'] = standard_visualization
+                
                 # Display the original image and segmentation side by side
                 st.subheader("Original Image vs BiSeNet Segmentation")
                 col1, col2 = st.columns(2)
@@ -406,26 +540,109 @@ if uploaded_file is not None:
                 with col2:
                     st.image(segmentation_image, channels="BGR", caption="BiSeNet Face Parsing Result")
                 
-                # Add a note about the segmentation result
-                st.markdown("---")
-                st.write("BiSeNet provides a detailed facial segmentation with different colors representing different facial features.")
-                st.write("You can use this segmentation as a reference for further analysis.")
+                # Display enhanced visualization
+                st.subheader("Enhanced BiSeNet Visualization")
+                if 'bisenet_enhanced_visualization' in results and results['bisenet_enhanced_visualization'] is not None:
+                    enhanced_vis_pil = cv2_to_pil(results['bisenet_enhanced_visualization'])
+                    if enhanced_vis_pil is not None:
+                        st.image(enhanced_vis_pil, caption="Enhanced Segmentation Visualization")
+                else:
+                    st.warning("Enhanced visualization not available")
+                
+                # Display the segmentation classes explanation
+                st.subheader("Segmentation Classes")
+                st.markdown("""
+                The BiSeNet face parsing model segments the face into different regions, each with a unique class index:
+                
+                - Skin (blue)
+                - Eyebrows (purple/teal)
+                - Eyes (green/pink)
+                - Nose (red)
+                - Lips (orange/red)
+                - Hair (light green)
+                
+                The exact colors may vary depending on the model version.
+                """)
+                
+                # Add information about the segmentation indices
+                st.subheader("Technical Information")
+                st.markdown("""
+                The BiSeNet model used in this application produces class indices in the range 36-237, 
+                which differs from the standard BiSeNet model that uses indices 0-15.
+                
+                Based on our analysis, the eyebrow classes in this model are approximately:
+                - Left eyebrow: class 127
+                - Right eyebrow: class 129
+                
+                However, the segmentation results may vary depending on lighting, pose, and other factors.
+                """)
                 
                 # Add a button to print all indices to console for research
-                if st.button("Print segmentation indices to console"):
+                if st.button("Print segmentation indices to console", key="bisenet_print_indices"):
                     unique_indices = np.unique(raw_segmentation)
                     print("\n\nAll unique indices in raw segmentation:")
                     print(unique_indices)
                     st.success("Indices printed to console. Check your terminal/console output.")
                 
+                # Add a note about the segmentation result
+                st.markdown("---")
+                st.write("BiSeNet provides a detailed facial segmentation with different colors representing different facial features.")
+                st.write("The extracted eyebrow masks are used for more accurate color analysis.")
+                st.write("You can use this segmentation as a reference for further analysis.")
+                
                 # Add a separator before the explanation
                 st.markdown("---")
                 
+                # Add a debug visualization section
+                st.header("Segmentation Debug Visualizations")
                 
-                # No debug image is saved to disk to prevent memory issues
+                # Add a toggle for showing debug visualizations
+                show_debug = st.checkbox("Show debug visualizations", value=False)
+                
+                if show_debug and 'bisenet_raw_segmentation' in results:
+                    # Create visualization of raw segmentation
+                    from bisenet_integration import visualize_segmentation, create_mask_visualization
+                    
+                    # Display raw segmentation visualization
+                    st.subheader("Raw Segmentation Classes")
+                    raw_vis = visualize_segmentation(results['bisenet_raw_segmentation'])
+                    st.image(raw_vis, channels="BGR")
+                    
+                    # Display mask visualizations
+                    st.subheader("Eyebrow Mask Visualizations")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.subheader("Left Eyebrow Mask")
+                        if 'left_eyebrow_mask' in results:
+                            # Create visualization of left eyebrow mask
+                            left_vis = create_mask_visualization(
+                                results['face_crop'], 
+                                results['left_eyebrow_mask'], 
+                                color=(255, 170, 0),  # Orange
+                                alpha=0.5
+                            )
+                            st.image(left_vis, channels="BGR")
+                        else:
+                            st.warning("Left eyebrow mask not available.")
+                    
+                    with col2:
+                        st.subheader("Right Eyebrow Mask")
+                        if 'right_eyebrow_mask' in results:
+                            # Create visualization of right eyebrow mask
+                            right_vis = create_mask_visualization(
+                                results['face_crop'], 
+                                results['right_eyebrow_mask'], 
+                                color=(255, 0, 85),  # Pink
+                                alpha=0.5
+                            )
+                            st.image(right_vis, channels="BGR")
+                        else:
+                            st.warning("Right eyebrow mask not available.")
             except Exception as e:
                 st.error(f"BiSeNet segmentation failed: {e}\nMake sure bisenet_integration.py, face-parsing, and weights are properly set up.")
         
+
         with tab5:
             # Detailed View tab
             st.header("Detailed View")
@@ -449,12 +666,16 @@ if uploaded_file is not None:
             with col3:
                 st.markdown("Left Eyebrow Alpha Matte")
                 if results['left_alpha'] is not None:
-                    st.image(cv2_to_pil(results['left_alpha']), use_column_width=True) # type: ignore
+                    left_alpha_pil = cv2_to_pil(results['left_alpha'])
+                    if left_alpha_pil is not None:
+                        st.image(left_alpha_pil, use_column_width=True)
             
             with col4:
                 st.markdown("Right Eyebrow Alpha Matte")
                 if results['right_alpha'] is not None:
-                    st.image(cv2_to_pil(results['right_alpha']), use_column_width=True) # type: ignore
+                    right_alpha_pil = cv2_to_pil(results['right_alpha'])
+                    if right_alpha_pil is not None:
+                        st.image(right_alpha_pil, use_column_width=True)
 
 
 
