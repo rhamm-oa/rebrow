@@ -5,6 +5,98 @@ import numpy as np
 import shutil
 import tempfile
 
+# Define class indices based on BiSeNetV2 documentation
+# Standard BiSeNet class indices (0-18)
+ATTRIBUTES = [
+    'background',  # 0
+    'skin',        # 1
+    'l_brow',      # 2 - Left eyebrow
+    'r_brow',      # 3 - Right eyebrow
+    'l_eye',       # 4 - Left eye
+    'r_eye',       # 5 - Right eye
+    'eye_g',       # 6 - Eye glasses
+    'l_ear',       # 7 - Left ear
+    'r_ear',       # 8 - Right ear
+    'ear_r',       # 9 - Ear rings
+    'nose',        # 10 - Nose
+    'mouth',       # 11 - Mouth
+    'u_lip',       # 12 - Upper lip
+    'l_lip',       # 13 - Lower lip
+    'neck',        # 14 - Neck
+    'neck_l',      # 15 - Necklace
+    'cloth',       # 16 - Clothing
+    'hair',        # 17 - Hair
+    'hat'          # 18 - Hat
+]
+
+# Standard BiSeNet color map
+COLOR_LIST = [
+    [0, 0, 0],       # Background - Black
+    [255, 85, 0],    # Skin - Orange
+    [255, 170, 0],   # Left eyebrow - Light orange
+    [255, 0, 85],    # Right eyebrow - Pink
+    [255, 0, 170],   # Left eye - Magenta
+    [0, 255, 0],     # Right eye - Green
+    [85, 255, 0],    # Eye glasses - Light green
+    [170, 255, 0],   # Left ear - Yellow-green
+    [0, 255, 85],    # Right ear - Cyan-green
+    [0, 255, 170],   # Ear rings - Light cyan
+    [0, 0, 255],     # Nose - Blue
+    [85, 0, 255],    # Mouth - Purple
+    [170, 0, 255],   # Upper lip - Light purple
+    [0, 85, 255],    # Lower lip - Light blue
+    [0, 170, 255],   # Neck - Cyan
+    [255, 255, 0],   # Necklace - Yellow
+    [255, 255, 85],  # Clothing - Light yellow
+    [255, 255, 170], # Hair - Very light yellow
+    [255, 0, 255],   # Hat - Magenta
+]
+
+# Class indices for face parts (standard model)
+BACKGROUND_CLASS = 0
+SKIN_CLASS = 1
+LEFT_EYEBROW_CLASS = 2
+RIGHT_EYEBROW_CLASS = 3
+LEFT_EYE_CLASS = 4
+RIGHT_EYE_CLASS = 5
+NOSE_CLASS = 10
+MOUTH_CLASS = 11
+UPPER_LIP_CLASS = 12
+LOWER_LIP_CLASS = 13
+HAIR_CLASS = 17
+
+# Based on the logs, these are the potential eyebrow classes in the non-standard model output
+NS_LEFT_EYEBROW_CLASS = 127  # Left eyebrow in the non-standard model
+NS_RIGHT_EYEBROW_CLASS = 129  # Right eyebrow in the non-standard model
+
+# Colors for visualization
+EYEBROW_COLORS = {
+    'left': (0, 165, 255),   # Orange in BGR
+    'right': (255, 0, 170)    # Pink in BGR
+}
+
+# Attributes list from face-parsing/utils/common.py
+ATTRIBUTES = [
+    'skin',
+    'l_brow',
+    'r_brow',
+    'l_eye',
+    'r_eye',
+    'eye_g',
+    'l_ear',
+    'r_ear',
+    'ear_r',
+    'nose',
+    'mouth',
+    'u_lip',
+    'l_lip',
+    'neck',
+    'neck_l',
+    'cloth',
+    'hair',
+    'hat'
+]
+
 # Define colors for visualization
 EYEBROW_COLORS = {
     'left': [255, 170, 0],   # Orange for left eyebrow (matches face-parsing color)
@@ -109,242 +201,240 @@ def extract_eyebrow_masks(segmentation_path, target_shape=None):
 
 def extract_eyebrow_masks_from_raw_segmentation(raw_segmentation, colored_segmentation=None):
     """
-    Extract eyebrow masks directly from the raw segmentation map using class indices.
+    Extract eyebrow masks from the raw segmentation output.
     
     Args:
-        raw_segmentation: Grayscale segmentation map with class indices
-        colored_segmentation: Optional colored visualization for overlay creation
+        raw_segmentation: Raw segmentation map with class indices
+        colored_segmentation: Colored visualization from BiSeNet (optional)
         
     Returns:
         left_mask: Binary mask for left eyebrow
         right_mask: Binary mask for right eyebrow
         eyebrow_overlay: Colored overlay showing only eyebrows
+        combined_mask: Combined mask of both eyebrows
     """
-    # The BiSeNet face parsing model typically uses these indices:
-    # 2 = left eyebrow
-    # 3 = right eyebrow
-    # But let's try several possible indices based on the model version
+    if raw_segmentation is None:
+        print("Warning: raw_segmentation is None, cannot extract eyebrow masks")
+        return None, None, None, None
     
-    # Print unique values to help identify the correct indices
+    # Get dimensions
+    h, w = raw_segmentation.shape[:2]
+    
+    # Initialize masks
+    left_mask = np.zeros((h, w), dtype=np.uint8)
+    right_mask = np.zeros((h, w), dtype=np.uint8)
+    combined_eyebrow_mask = np.zeros((h, w), dtype=np.uint8)
+    
+    # Get unique class indices in the segmentation
     unique_values = np.unique(raw_segmentation)
-    print(f"Unique class indices in raw segmentation: {unique_values}")
+    print(f"Unique class indices: {unique_values}")
     
-    # Based on user feedback, we know the exact indices for eyebrows in this model:
-    # 97 for the purple eyebrow and 101 for the teal/blue eyebrow
+    # Determine if we're using standard or non-standard model
+    max_index = np.max(unique_values)
+    is_non_standard = max_index > 19  # Standard BiSeNet has 19 classes (0-18)
     
-    # Use these specific indices first
-    left_eyebrow_idx = 97  # Purple eyebrow
-    right_eyebrow_idx = 101  # Teal/blue eyebrow
-    
-    print(f"Using known eyebrow indices: left (purple)={left_eyebrow_idx}, right (teal)={right_eyebrow_idx}")
-    
-    # Create binary masks for each eyebrow using the known indices
-    left_mask = (raw_segmentation == left_eyebrow_idx).astype(np.uint8) * 255
-    right_mask = (raw_segmentation == right_eyebrow_idx).astype(np.uint8) * 255
-    
-    # Check if we found anything with these indices
-    left_pixels = np.count_nonzero(left_mask)
-    right_pixels = np.count_nonzero(right_mask)
-    
-    if left_pixels > 0 or right_pixels > 0:
-        print(f"Found {left_pixels} pixels for left eyebrow and {right_pixels} for right eyebrow")
-        
-        # Create a colored overlay
-        if colored_segmentation is not None and len(colored_segmentation.shape) == 3:
-            eyebrow_overlay = colored_segmentation.copy()
+    if is_non_standard:
+        print("Using non-standard BiSeNet model with indices 36-237")
+        # Check if non-standard eyebrow classes are present
+        if NS_LEFT_EYEBROW_CLASS in unique_values or NS_RIGHT_EYEBROW_CLASS in unique_values:
+            print(f"Found non-standard eyebrow classes {NS_LEFT_EYEBROW_CLASS} and {NS_RIGHT_EYEBROW_CLASS}")
+            
+            # Create masks for left and right eyebrows
+            if NS_LEFT_EYEBROW_CLASS in unique_values:
+                left_mask[raw_segmentation == NS_LEFT_EYEBROW_CLASS] = 255
+                print(f"Left eyebrow pixels: {np.count_nonzero(left_mask)}")
+            
+            if NS_RIGHT_EYEBROW_CLASS in unique_values:
+                right_mask[raw_segmentation == NS_RIGHT_EYEBROW_CLASS] = 255
+                print(f"Right eyebrow pixels: {np.count_nonzero(right_mask)}")
         else:
-            h, w = raw_segmentation.shape[:2]
-            eyebrow_overlay = np.zeros((h, w, 3), dtype=np.uint8)
-        
-        # Use bright green for visibility
-        eyebrow_overlay[left_mask > 0] = [0, 255, 0]  # type: ignore # BGR format
-        eyebrow_overlay[right_mask > 0] = [0, 255, 0]  # type: ignore # BGR format
-        
-        return left_mask, right_mask, eyebrow_overlay
-    
-    # If the known indices didn't work (which would be surprising), fall back to detection
-    print("Known indices didn't work, falling back to detection...")
-    
-    # Define approximate eyebrow regions (top 1/3 of face, left and right sides)
-    h, w = raw_segmentation.shape[:2]
-    top_third = slice(0, h//3)
-    left_side = slice(0, w//2)
-    right_side = slice(w//2, w)
-    
-    # Get the most common indices in these regions
-    left_eyebrow_region = raw_segmentation[top_third, left_side]
-    right_eyebrow_region = raw_segmentation[top_third, right_side]
-    
-    # Count occurrences of each index in these regions
-    left_counts = np.bincount(left_eyebrow_region.flatten())
-    right_counts = np.bincount(right_eyebrow_region.flatten())
-    
-    # Ensure the arrays are long enough
-    if len(left_counts) < 256:
-        left_counts = np.pad(left_counts, (0, 256 - len(left_counts)))
-    if len(right_counts) < 256:
-        right_counts = np.pad(right_counts, (0, 256 - len(right_counts)))
-    
-    # Find the most common indices in each region (excluding 0 which is background)
-    left_indices = np.argsort(left_counts)[-5:]  # Get top 5 indices
-    right_indices = np.argsort(right_counts)[-5:]  # Get top 5 indices
-    
-    print(f"Most common indices in left eyebrow region: {left_indices}")
-    print(f"Most common indices in right eyebrow region: {right_indices}")
-    
-    # Try these indices as potential eyebrow indices
-    possible_eyebrow_indices = [(97, 101)]  # Start with our known good indices
-    
-    for left_idx in left_indices:
-        for right_idx in right_indices:
-            if left_idx > 0 and right_idx > 0:  # Skip background
-                possible_eyebrow_indices.append((left_idx, right_idx))
-    
-    print(f"Trying these index pairs: {possible_eyebrow_indices[:5]}... (total: {len(possible_eyebrow_indices)})")
-    
-    # If we have a colored segmentation, also try to identify indices by color
-    if colored_segmentation is not None:
-        # Convert to HSV for better color detection
-        hsv = cv2.cvtColor(colored_segmentation, cv2.COLOR_BGR2HSV)
-        
-        # Look for purple/magenta (eyebrow color in the sample image)
-        lower_purple = np.array([140, 50, 50])
-        upper_purple = np.array([170, 255, 255])
-        purple_mask = cv2.inRange(hsv, lower_purple, upper_purple)
-        
-        # Look for teal/cyan (another eyebrow color)
-        lower_teal = np.array([80, 50, 50])
-        upper_teal = np.array([100, 255, 255])
-        teal_mask = cv2.inRange(hsv, lower_teal, upper_teal)
-        
-        # Find indices in the raw segmentation that correspond to these colors
-        purple_indices = raw_segmentation[purple_mask > 0] # type: ignore
-        teal_indices = raw_segmentation[teal_mask > 0] # type: ignore
-        
-        if len(purple_indices) > 0 and len(teal_indices) > 0:
-            purple_idx = np.bincount(purple_indices).argmax()
-            teal_idx = np.bincount(teal_indices).argmax()
+            # Try to identify potential eyebrow classes based on position and color
+            print("Non-standard eyebrow classes not found, trying to identify them...")
             
-            if purple_idx > 0 and teal_idx > 0:  # Skip background
-                print(f"Found indices by color: purple={purple_idx}, teal={teal_idx}")
-                possible_eyebrow_indices.insert(0, (purple_idx, teal_idx))  # type: ignore # type: ignore # Try these first
-    
-    # Try each pair of indices
-    for left_idx, right_idx in possible_eyebrow_indices:
-        # Check if these indices exist in the segmentation
-        if left_idx in unique_values or right_idx in unique_values:
-            print(f"Found eyebrow indices: left={left_idx}, right={right_idx}")
+            # Use the enhanced visualization approach
+            vis = visualize_segmentation(raw_segmentation)
             
-            # Create binary masks for each eyebrow
-            left_mask = (raw_segmentation == left_idx).astype(np.uint8) * 255
-            right_mask = (raw_segmentation == right_idx).astype(np.uint8) * 255
+            # Convert to HSV for better color segmentation
+            hsv = cv2.cvtColor(vis, cv2.COLOR_BGR2HSV)
             
-            # Check if we found anything
-            left_pixels = np.count_nonzero(left_mask)
-            right_pixels = np.count_nonzero(right_mask)
-            
-            if left_pixels > 0 or right_pixels > 0:
-                print(f"Found {left_pixels} pixels for left eyebrow and {right_pixels} for right eyebrow")
-                
-                # Create a colored overlay
-                if colored_segmentation is not None and len(colored_segmentation.shape) == 3:
-                    base_image = colored_segmentation
-                else:
-                    # Create a blank RGB image if no colored segmentation is provided
-                    base_image = np.zeros((raw_segmentation.shape[0], raw_segmentation.shape[1], 3), dtype=np.uint8)
-                
-                # Create overlay
-                eyebrow_overlay = base_image.copy()
-                # Use bright green for visibility
-                eyebrow_overlay[left_mask > 0] = [0, 255, 0]  # BGR format
-                eyebrow_overlay[right_mask > 0] = [0, 255, 0]
-                
-                return left_mask, right_mask, eyebrow_overlay
+            # Try to find eyebrow-like regions in the upper part of the face
+            # This is a heuristic approach and may need tuning
+            for idx in unique_values:
+                if idx > 35:  # Skip background and standard classes
+                    # Create a temporary mask for this class
+                    temp_mask = np.zeros((h, w), dtype=np.uint8)
+                    temp_mask[raw_segmentation == idx] = 255
+                    
+                    # Count pixels in the upper face region (approximately where eyebrows would be)
+                    upper_third = h // 3
+                    upper_face_mask = np.zeros((h, w), dtype=np.uint8)
+                    upper_face_mask[0:upper_third, :] = 255
+                    
+                    # Count pixels in the upper face region
+                    upper_face_pixels = cv2.bitwise_and(temp_mask, upper_face_mask)
+                    upper_face_count = np.count_nonzero(upper_face_pixels)
+                    total_pixels = np.count_nonzero(temp_mask)
+                    
+                    # If more than 50% of the pixels are in the upper face, it could be an eyebrow
+                    if total_pixels > 100 and upper_face_count / total_pixels > 0.5:
+                        print(f"Class {idx} could be an eyebrow class (upper face ratio: {upper_face_count / total_pixels:.2f})")
+                        
+                        # Try to determine if it's left or right eyebrow based on position
+                        y_indices, x_indices = np.where(temp_mask > 0)
+                        if len(x_indices) > 0:
+                            center_x = np.mean(x_indices)
+                            
+                            # If center is on the left side of the image, it's likely the left eyebrow
+                            if center_x < w/2:
+                                print(f"Class {idx} is likely the left eyebrow (center_x: {center_x})")
+                                left_mask = cv2.bitwise_or(left_mask, temp_mask)
+                            else:
+                                print(f"Class {idx} is likely the right eyebrow (center_x: {center_x})")
+                                right_mask = cv2.bitwise_or(right_mask, temp_mask)
+    else:
+        # Standard BiSeNet model with classes 2 and 3 for left and right eyebrows
+        print("Using standard BiSeNet model with indices 0-18")
+        
+        # Check for left eyebrow (class 2)
+        if LEFT_EYEBROW_CLASS in unique_values:
+            left_mask[raw_segmentation == LEFT_EYEBROW_CLASS] = 255
+            print(f"Left eyebrow pixels: {np.count_nonzero(left_mask)}")
+        
+        # Check for right eyebrow (class 3)
+        if RIGHT_EYEBROW_CLASS in unique_values:
+            right_mask[raw_segmentation == RIGHT_EYEBROW_CLASS] = 255
+            print(f"Right eyebrow pixels: {np.count_nonzero(right_mask)}")
     
-    # If we couldn't find eyebrows with any of the index pairs, try a fallback approach
-    print("Could not find eyebrows using standard indices, trying fallback approach...")
+    # Create combined mask
+    combined_eyebrow_mask = cv2.bitwise_or(left_mask, right_mask)
+    # If the masks are too small, apply dilation to make them more visible
+    if np.count_nonzero(combined_eyebrow_mask) < 1000:
+        kernel = np.ones((5, 5), np.uint8)
+        combined_eyebrow_mask = cv2.dilate(combined_eyebrow_mask, kernel, iterations=2)
+        left_mask = cv2.dilate(left_mask, kernel, iterations=2)
+        right_mask = cv2.dilate(right_mask, kernel, iterations=2)
     
-    # Create empty masks as fallback
-    h, w = raw_segmentation.shape[:2]
-    empty_mask = np.zeros((h, w), dtype=np.uint8)
+    # If we have separate left and right masks, create a colored overlay
+    if np.count_nonzero(left_mask) > 100 or np.count_nonzero(right_mask) > 100:
+        # Create a colored overlay for visualization
+        eyebrow_overlay = np.zeros((h, w, 3), dtype=np.uint8)
+        
+        # Apply colors to the masks using vectorized operations for efficiency
+        # Convert to np.uint8 to fix Pylance type errors
+        left_mask_uint8 = np.array(left_mask, dtype=np.uint8)
+        right_mask_uint8 = np.array(right_mask, dtype=np.uint8)
+        eyebrow_overlay[left_mask_uint8 > 0] = EYEBROW_COLORS['left']   # Orange for left eyebrow
+        eyebrow_overlay[right_mask_uint8 > 0] = EYEBROW_COLORS['right']  # Pink for right eyebrow
+        
+        return left_mask, right_mask, eyebrow_overlay, combined_eyebrow_mask
+    else:
+        print("Could not extract eyebrow masks from segmentation")
+        return None, None, None, None
+
+
+def extract_eyebrows_common_approach(raw_segmentation, original_image=None):
+    """
+    Extract eyebrows using the approach from utils/common.py.
+    This function creates a visualization similar to the one in the face-parsing repo.
     
-    # Try to extract just the hair regions from the top of the head
-    # This might include eyebrows in your specific model
-    top_quarter = slice(0, h//4)  # Just the top quarter of the image
-    top_region = raw_segmentation[top_quarter, :]
+    Args:
+        raw_segmentation: Raw segmentation map with class indices
+        original_image: Original image to blend with the segmentation (optional)
+        
+    Returns:
+        blended_image: Visualization of the segmentation blended with the original image
+        eyebrow_mask: Binary mask containing only eyebrows
+    """
+    # Get image dimensions
+    h, w = raw_segmentation.shape
     
-    # Find the most common non-zero indices in the top region
-    top_indices = np.bincount(top_region.flatten())
-    if len(top_indices) > 0:
-        # Get the most common non-zero index
-        if 0 in np.unique(top_region) and len(top_indices) > 1:
-            # Skip 0 (background) if present
-            top_index = np.argsort(top_indices[1:])[-1] + 1 if len(top_indices) > 1 else 0
+    # Create a color mask for visualization
+    segmentation_color = np.zeros((h, w, 3), dtype=np.uint8)
+    
+    # Determine if we're using standard or non-standard model
+    max_index = np.max(raw_segmentation)
+    is_non_standard = max_index > 19  # Standard BiSeNet has 19 classes (0-18)
+    
+    # Create a binary mask for eyebrows
+    eyebrow_mask = np.zeros((h, w), dtype=np.uint8)
+    
+    if is_non_standard:
+        # For non-standard model, use the classes we've identified
+        if NS_LEFT_EYEBROW_CLASS in np.unique(raw_segmentation):
+            eyebrow_mask[raw_segmentation == NS_LEFT_EYEBROW_CLASS] = 255
+            # Use the color from COLOR_LIST for visualization
+            segmentation_color[raw_segmentation == NS_LEFT_EYEBROW_CLASS] = COLOR_LIST[LEFT_EYEBROW_CLASS]
+        
+        if NS_RIGHT_EYEBROW_CLASS in np.unique(raw_segmentation):
+            eyebrow_mask[raw_segmentation == NS_RIGHT_EYEBROW_CLASS] = 255
+            segmentation_color[raw_segmentation == NS_RIGHT_EYEBROW_CLASS] = COLOR_LIST[RIGHT_EYEBROW_CLASS]
+        
+        # Apply colors for other facial features based on our best guess
+        # This is approximate and may need tuning
+        for idx in np.unique(raw_segmentation):
+            if idx not in [NS_LEFT_EYEBROW_CLASS, NS_RIGHT_EYEBROW_CLASS]:
+                # Map non-standard indices to standard ones as best we can
+                if 36 <= idx <= 50:  # Skin
+                    segmentation_color[raw_segmentation == idx] = COLOR_LIST[SKIN_CLASS]
+                elif 110 <= idx <= 120:  # Left eye
+                    segmentation_color[raw_segmentation == idx] = COLOR_LIST[LEFT_EYE_CLASS]
+                elif 120 <= idx <= 130 and idx not in [NS_LEFT_EYEBROW_CLASS, NS_RIGHT_EYEBROW_CLASS]:  # Right eye
+                    segmentation_color[raw_segmentation == idx] = COLOR_LIST[RIGHT_EYE_CLASS]
+                elif 130 <= idx <= 140:  # Nose
+                    segmentation_color[raw_segmentation == idx] = COLOR_LIST[NOSE_CLASS]
+                elif 150 <= idx <= 160:  # Lips
+                    segmentation_color[raw_segmentation == idx] = COLOR_LIST[MOUTH_CLASS]
+                elif 170 <= idx <= 180:  # Hair
+                    segmentation_color[raw_segmentation == idx] = COLOR_LIST[HAIR_CLASS]
+    else:
+        # For standard model, use the standard class indices
+        # Apply colors for each class
+        for class_idx in range(1, min(len(COLOR_LIST), np.max(raw_segmentation) + 1)):
+            class_pixels = np.where(raw_segmentation == class_idx)
+            segmentation_color[class_pixels[0], class_pixels[1], :] = COLOR_LIST[class_idx]
+        
+        # Extract eyebrow mask
+        eyebrow_mask[raw_segmentation == LEFT_EYEBROW_CLASS] = 255
+        eyebrow_mask[raw_segmentation == RIGHT_EYEBROW_CLASS] = 255
+    
+    # If original image is provided, blend with segmentation
+    if original_image is not None:
+        # Ensure original image is in BGR format for blending
+        if len(original_image.shape) == 3 and original_image.shape[2] == 3:
+            bgr_image = original_image.copy()
         else:
-            top_index = np.argmax(top_indices)
+            bgr_image = cv2.cvtColor(original_image, cv2.COLOR_RGB2BGR)
         
-        if top_index > 0:
-            print(f"Using top region index: {top_index}")
-            hair_mask = (raw_segmentation == top_index).astype(np.uint8) * 255
-            
-            # Apply morphological operations to clean up the mask
-            kernel = np.ones((3,3), np.uint8)
-            hair_mask = cv2.morphologyEx(hair_mask, cv2.MORPH_OPEN, kernel)
-            
-            # Create a colored overlay
-            if colored_segmentation is not None and len(colored_segmentation.shape) == 3:
-                eyebrow_overlay = colored_segmentation.copy()
-            else:
-                eyebrow_overlay = np.zeros((h, w, 3), dtype=np.uint8)
-            
-            eyebrow_overlay[hair_mask > 0] = [0, 255, 0]  # type: ignore # BGR format
-            
-            # Try to isolate just the eyebrow regions from the hair mask
-            # Focus on the middle third horizontally, top third vertically
-            eyebrow_region_mask = np.zeros_like(hair_mask)
-            eyebrow_region_mask[0:h//3, w//4:3*w//4] = 255
-            
-            # Combine with the hair mask to get just the eyebrows
-            eyebrow_mask = cv2.bitwise_and(hair_mask, eyebrow_region_mask)
-            
-            if np.count_nonzero(eyebrow_mask) > 0:
-                print(f"Found potential eyebrows in hair region")
-                return eyebrow_mask, eyebrow_mask, eyebrow_overlay
-            else:
-                print(f"Using full hair mask as fallback")
-                return hair_mask, hair_mask, eyebrow_overlay
+        # Resize if necessary
+        if bgr_image.shape[:2] != (h, w):
+            bgr_image = cv2.resize(bgr_image, (w, h))
+        
+        # Blend the image with the segmentation mask
+        blended_image = cv2.addWeighted(bgr_image, 0.6, segmentation_color, 0.4, 0)
+        return blended_image, eyebrow_mask
     
-    # If still no success, try color-based approach as last resort
-    if colored_segmentation is not None and len(colored_segmentation.shape) == 3:
-        # Convert to HSV for better color detection
-        hsv = cv2.cvtColor(colored_segmentation, cv2.COLOR_BGR2HSV)
-        
-        # Try to detect purple/magenta (common eyebrow color in visualizations)
-        lower_purple = np.array([140, 50, 50])
-        upper_purple = np.array([170, 255, 255])
-        purple_mask = cv2.inRange(hsv, lower_purple, upper_purple)
-        
-        # Try to detect teal/cyan (another common eyebrow color)
-        lower_teal = np.array([80, 50, 50])
-        upper_teal = np.array([100, 255, 255])
-        teal_mask = cv2.inRange(hsv, lower_teal, upper_teal)
-        
-        # Combine masks
-        combined_mask = cv2.bitwise_or(purple_mask, teal_mask)
-        
-        if np.count_nonzero(combined_mask) > 0:
-            print("Found eyebrows using color detection fallback")
-            
-            # Create overlay
-            eyebrow_overlay = colored_segmentation.copy()
-            eyebrow_overlay[combined_mask > 0] = [0, 255, 0]  # type: ignore # BGR format
-            
-            return combined_mask, combined_mask, eyebrow_overlay
+    return segmentation_color, eyebrow_mask
+    if np.count_nonzero(left_mask) < 100 or np.count_nonzero(right_mask) < 100:
+        print("BiSeNet masks are too small, using landmark-based fallback")
+        # This will be handled by the traditional approach in main.py
     
-    # If all else fails, return empty masks
-    print("Could not find eyebrows with any method")
-    eyebrow_overlay = np.zeros((h, w, 3), dtype=np.uint8) if colored_segmentation is None else colored_segmentation.copy()
-    return empty_mask, empty_mask, eyebrow_overlay
+    # Create a colored overlay for visualization
+    eyebrow_overlay = np.zeros((h, w, 3), dtype=np.uint8)
+    
+    # Apply colors to the masks
+    # Use safer approach with explicit boolean conversion
+    left_indices = np.where(np.array(left_mask, dtype=np.uint8) > 0)
+    for i, j in zip(*left_indices):
+        eyebrow_overlay[i, j] = EYEBROW_COLORS['left']  # Orange for left eyebrow (BGR)
+    
+    right_indices = np.where(np.array(right_mask, dtype=np.uint8) > 0)
+    for i, j in zip(*right_indices):
+        eyebrow_overlay[i, j] = EYEBROW_COLORS['right']  # Pink for right eyebrow (BGR)
+    
+    # Also create a combined eyebrow mask for visualization
+    combined_mask = cv2.bitwise_or(left_mask, right_mask)
+    
+    return left_mask, right_mask, eyebrow_overlay, combined_mask
 
 def extract_only_eyebrows(segmentation_image, raw_segmentation=None):
     """
@@ -484,28 +574,175 @@ def create_eyebrow_overlay(image, left_mask, right_mask, alpha=0.7):
     
     # Apply colors to the mask where eyebrows are detected
     if left_mask is not None and left_mask.shape[:2] == image.shape[:2]:
-        color_mask[left_mask > 0] = EYEBROW_COLORS['left']
+        # Convert to np.uint8 to fix Pylance type errors
+        left_mask_uint8 = np.array(left_mask, dtype=np.uint8)
+        color_mask[left_mask_uint8 > 0] = EYEBROW_COLORS['left']
     
     if right_mask is not None and right_mask.shape[:2] == image.shape[:2]:
-        color_mask[right_mask > 0] = EYEBROW_COLORS['right']
+        # Convert to np.uint8 to fix Pylance type errors
+        right_mask_uint8 = np.array(right_mask, dtype=np.uint8)
+        color_mask[right_mask_uint8 > 0] = EYEBROW_COLORS['right']
     
     # Blend the original image with the color mask
     overlay = cv2.addWeighted(overlay, 1.0 - alpha, color_mask, alpha, 0)
     
     return overlay
 
+
+def visualize_segmentation(segmentation_output):
+    """
+    Visualize the segmentation output for debugging
+    
+    Args:
+        segmentation_output: Raw segmentation output from BiSeNet
+        
+    Returns:
+        Visualization of the segmentation
+    """
+    # Create a visualization of the segmentation
+    unique_indices = np.unique(segmentation_output)
+    print(f"Unique class indices found: {unique_indices}")
+    
+    # Determine if we're using the standard or non-standard model
+    max_index = np.max(unique_indices)
+    is_non_standard = max_index > 19
+    
+    if is_non_standard:
+        print("Using non-standard model visualization")
+        # For non-standard model with indices 36-237
+        # Create a colormap with enough entries for all possible indices
+        max_class = 240  # A bit more than the maximum observed index (237)
+        colors = np.zeros((max_class, 3), dtype=np.uint8)
+        
+        # Set specific colors for important classes based on observed behavior
+        # Background/skin - Blue
+        for i in range(36, 50):
+            colors[i] = [204, 204, 255]
+        
+        # Left eyebrow - Purple
+        colors[127] = [255, 0, 255]
+        
+        # Right eyebrow - Teal
+        colors[129] = [0, 255, 255]
+        
+        # Eyes - Green/Pink
+        for i in range(110, 120):
+            colors[i] = [0, 255, 0]  # Left eye
+        for i in range(120, 130):
+            if i != 127 and i != 129:  # Skip eyebrow indices
+                colors[i] = [255, 0, 128]  # Right eye
+        
+        # Nose - Red
+        for i in range(130, 140):
+            colors[i] = [255, 0, 0]
+        
+        # Lips - Orange/Red
+        for i in range(150, 160):
+            colors[i] = [255, 128, 0]
+        
+        # Hair - Light green
+        for i in range(170, 180):
+            colors[i] = [128, 255, 128]
+    else:
+        # Dynamically size color array for all present classes
+        max_class = int(np.max(segmentation_output)) + 1
+        colors = np.zeros((max_class, 3), dtype=np.uint8)
+
+        # Set specific colors for important classes
+        # 0: Background - Black
+        colors[0] = [0, 0, 0]
+        # 1: Face - Light blue (if present)
+        if 1 < max_class:
+            colors[1] = [204, 204, 255]
+
+        # Non-standard model: assign eyebrow colors to 127/129 if present
+        if NS_LEFT_EYEBROW_CLASS < max_class:
+            colors[NS_LEFT_EYEBROW_CLASS] = [255, 165, 0]  # Orange
+        if NS_RIGHT_EYEBROW_CLASS < max_class:
+            colors[NS_RIGHT_EYEBROW_CLASS] = [255, 215, 0]  # Gold
+        # Also assign for standard indices just in case
+        if LEFT_EYEBROW_CLASS < max_class:
+            colors[LEFT_EYEBROW_CLASS] = [255, 165, 0]
+        if RIGHT_EYEBROW_CLASS < max_class:
+            colors[RIGHT_EYEBROW_CLASS] = [255, 215, 0]
+        # Eyes
+        if LEFT_EYE_CLASS < max_class:
+            colors[LEFT_EYE_CLASS] = [255, 0, 170]
+        if RIGHT_EYE_CLASS < max_class:
+            colors[RIGHT_EYE_CLASS] = [0, 255, 0]
+        # Nose
+        if NOSE_CLASS < max_class:
+            colors[NOSE_CLASS] = [0, 0, 255]
+        # Mouth
+        if MOUTH_CLASS < max_class:
+            colors[MOUTH_CLASS] = [85, 0, 255]
+
+        # Fill remaining colors with random values
+        for i in range(max_class):
+            if np.all(colors[i] == 0):
+                colors[i] = np.random.randint(0, 255, size=3, dtype=np.uint8)
+
+        # Warn if eyebrow classes are not present
+        unique_indices = np.unique(segmentation_output)
+        if NS_LEFT_EYEBROW_CLASS not in unique_indices:
+            print(f"Warning: NS_LEFT_EYEBROW_CLASS ({NS_LEFT_EYEBROW_CLASS}) not present in segmentation output.")
+        if NS_RIGHT_EYEBROW_CLASS not in unique_indices:
+            print(f"Warning: NS_RIGHT_EYEBROW_CLASS ({NS_RIGHT_EYEBROW_CLASS}) not present in segmentation output.")
+    
+    # Create a visualization image
+    vis = np.zeros((segmentation_output.shape[0], segmentation_output.shape[1], 3), dtype=np.uint8)
+    
+    # Assign colors to each class
+    for idx in unique_indices:
+        if idx < max_class:  # Skip indices that are out of range
+            # Convert to np.uint8 to fix Pylance type errors
+            mask = np.array(segmentation_output == idx, dtype=np.uint8)
+            mask_indices = np.where(mask > 0)
+            vis[mask_indices] = colors[idx]
+    
+    return vis
+
+
+def create_mask_visualization(original_image, mask, color=(0, 255, 0), alpha=0.5):
+    """
+    Create a visualization of a mask overlaid on an image
+    
+    Args:
+        original_image: Original image (BGR format)
+        mask: Binary mask
+        color: Color for the mask overlay (BGR format)
+        alpha: Transparency of the overlay (0-1)
+        
+    Returns:
+        Visualization with the mask overlaid on the image
+    """
+    # Create a copy of the original image
+    vis = original_image.copy()
+    
+    # Create a colored mask
+    colored_mask = np.zeros_like(original_image)
+    colored_mask[mask > 0] = color
+    
+    # Overlay the mask on the image
+    cv2.addWeighted(colored_mask, alpha, vis, 1 - alpha, 0, vis)
+    
+    # Draw contours around the mask for better visibility
+    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(vis, contours, -1, color, 2)
+    
+    return vis
+
 def segment_eyebrows_with_bisenet(image_path, target_shape=None):
     """
-    Main function to segment eyebrows using BiSeNet.
-    This uses the exact command structure the user provided.
+    Segment eyebrows using BiSeNet face parsing.
     
     Args:
         image_path: Path to the input image
-        target_shape: Optional shape to resize the masks to
+        target_shape: Optional shape to resize the segmentation result to
         
     Returns:
-        segmentation_image: The full segmentation image from BiSeNet (colored visualization)
-        raw_segmentation: The raw grayscale segmentation map with class indices
+        segmentation_image: Colored visualization of the segmentation
+        raw_segmentation: Raw segmentation map with class indices
     """
     temp_dir = None
     try:
@@ -524,6 +761,12 @@ def segment_eyebrows_with_bisenet(image_path, target_shape=None):
         if segmentation_image is None or raw_segmentation is None:
             raise ValueError(f"Failed to read segmentation result: {segmentation_path}")
         
+        # Resize if needed
+        if target_shape is not None:
+            h, w = target_shape[:2]
+            segmentation_image = cv2.resize(segmentation_image, (w, h), interpolation=cv2.INTER_NEAREST)
+            raw_segmentation = cv2.resize(raw_segmentation, (w, h), interpolation=cv2.INTER_NEAREST)
+        
         # Make copies of the segmentation images
         segmentation_copy = segmentation_image.copy()
         raw_segmentation_copy = raw_segmentation.copy()
@@ -531,6 +774,22 @@ def segment_eyebrows_with_bisenet(image_path, target_shape=None):
         # Print unique values in the raw segmentation to help identify eyebrow indices
         unique_values = np.unique(raw_segmentation_copy)
         print(f"Unique class indices in segmentation: {unique_values}")
+        
+        # Check if we have values in the expected range (0-15) or if we have a different model output
+        # Convert to a Python list to avoid type issues with numpy arrays
+        unique_values_list = unique_values.tolist() if isinstance(unique_values, np.ndarray) else []
+        max_value = max(unique_values_list) if unique_values_list else 0
+        if max_value > 30:  # If we have values like 33-239, we're using a different model
+            # Convert to a more standard format - this is a fallback approach
+            # Map the high values to our expected class indices
+            # This is just a placeholder - in a real scenario, you'd need to map the actual classes correctly
+            print("Warning: Using a different BiSeNet model with non-standard class indices")
+            # Create a new raw segmentation with standard class indices
+            new_raw_segmentation = np.zeros_like(raw_segmentation_copy)
+            
+            # For now, just return the original segmentation
+            # In a real implementation, you would map the classes correctly
+            pass
         
         # Clean up temporary files
         if os.path.exists(temp_dir):
@@ -542,14 +801,15 @@ def segment_eyebrows_with_bisenet(image_path, target_shape=None):
         
         return segmentation_copy, raw_segmentation_copy
     except Exception as e:
-        print(f"Error in segment_eyebrows_with_bisenet: {e}")
-        # Try to clean up even if there was an error
-        if temp_dir and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-            except:
-                pass
-        raise
+        print(f"BiSeNet segmentation failed: {e}")
+        print("Make sure bisenet_integration.py, face-parsing, and weights are properly set up.")
+        # Return empty arrays with the target shape if provided
+        if target_shape is not None:
+            h, w = target_shape[:2]
+            empty_segmentation = np.zeros((h, w, 3), dtype=np.uint8)
+            empty_raw = np.zeros((h, w), dtype=np.uint8)
+            return empty_segmentation, empty_raw
+        return None, None
 
 if __name__ == '__main__':
     import argparse

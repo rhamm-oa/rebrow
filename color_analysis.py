@@ -9,33 +9,35 @@ class ColorAnalysis:
     def __init__(self):
         pass
     
-    def extract_dominant_colors(self, image, mask, n_colors=3):
-        """Extract dominant colors from the masked region using KMeans clustering"""
+    def extract_dominant_colors(self, image, mask, n_colors=3, exclude_skin=True):
+        """Extract dominant colors from the masked region using KMeans clustering
+        
+        Args:
+            image: Input image (BGR format)
+            mask: Binary mask for the region of interest
+            n_colors: Number of dominant colors to extract
+            exclude_skin: Whether to apply additional filtering to exclude skin tones
+            
+        Returns:
+            colors: Array of dominant colors in RGB format
+            percentages: Percentage of each color in the mask
+        """
         if mask is None or np.sum(mask) == 0:
             return None, None
         
         # Apply mask to image
         masked_image = cv2.bitwise_and(image, image, mask=mask)
         
-        # Convert to HSV for better hair/skin separation
-        hsv_image = cv2.cvtColor(masked_image, cv2.COLOR_BGR2HSV)
+        # Simple approach: just use the masked pixels directly
+        # Get all non-zero pixels (where the mask is applied)
+        non_zero_pixels = masked_image[np.where(mask > 0)]
         
-        # Create a more restrictive mask for hair pixels
-        # Hair tends to have lower value (darker) than skin
-        _, v_channel = cv2.threshold(hsv_image[:,:,2], 150, 255, cv2.THRESH_BINARY_INV)
-        
-        # Combine with original mask
-        hair_mask = cv2.bitwise_and(mask, v_channel)
-        
-        # If hair mask is too small, fall back to original mask
-        if np.sum(hair_mask) < 50:
-            hair_mask = mask
-        
-        # Apply refined hair mask
-        hair_pixels = image[hair_mask > 0]
-        
+        # If we don't have enough pixels, return None
+        if len(non_zero_pixels) == 0:
+            return None, None
+            
         # Reshape the image to be a list of pixels
-        pixels = hair_pixels.reshape(-1, 3)
+        pixels = non_zero_pixels.reshape(-1, 3)
         
         # Convert from BGR to RGB
         pixels = pixels[:, ::-1]
