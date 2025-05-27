@@ -3,3 +3,4 @@ rebrowenv
 data 
 __pycache__/
 face-parsing/
+debug_images
