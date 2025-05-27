@@ -10,6 +10,7 @@ from face_detection import FaceDetector
 from eyebrow_segmentation import EyebrowSegmentation
 from color_analysis import ColorAnalysis
 from shape_analysis import ShapeAnalysis
+from facer_segmentation import FacerSegmentation
 
 # Set page config
 st.set_page_config(
@@ -32,6 +33,7 @@ face_detector = FaceDetector()
 eyebrow_segmentation = EyebrowSegmentation()
 color_analyzer = ColorAnalysis()
 shape_analyzer = ShapeAnalysis()
+facer_segmenter = FacerSegmentation()
 
 # Function to convert OpenCV image to PIL Image
 def cv2_to_pil(cv2_img):
@@ -225,7 +227,7 @@ if uploaded_file is not None:
     
     if results:
         # Create tabs for different analyses
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Color Analysis", "Shape Analysis", "Deep Segmentation (BiSeNet)", "Detailed View"])
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Overview", "Color Analysis", "Shape Analysis", "Deep Segmentation (BiSeNet)", "Facer Segmentation", "Detailed View"])
         
         
         with tab1:
@@ -644,6 +646,74 @@ if uploaded_file is not None:
         
 
         with tab5:
+            # Facer Segmentation tab
+            st.header("Facer Segmentation")
+            st.markdown("""
+                This tab uses the Facer library for advanced face parsing and eyebrow segmentation. 
+                Facer provides high-quality segmentation masks for facial features including eyebrows.
+            """)
+            
+            try:
+                # Get the cropped face image
+                cropped_face = results.get('face_crop', None)
+                
+                if cropped_face is not None:
+                    # Process the cropped face with Facer
+                    with st.spinner('Processing with Facer...'):
+                        facer_result = facer_segmenter.segment_eyebrows(cropped_face, visualize=True)
+                    
+                    if facer_result.get('success', False):
+                        # Get the visualization image
+                        vis_img = facer_result.get('visualization_image')
+                        if vis_img is not None:
+                            st.image(vis_img, caption="Facer Segmentation Results", use_column_width=True)
+                        
+                        # Display the eyebrow masks
+                        st.subheader("Eyebrow Masks")
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            left_eyebrow_mask = facer_result.get('left_eyebrow_mask')
+                            if left_eyebrow_mask is not None:
+                                st.image(left_eyebrow_mask, caption="Left Eyebrow Mask", use_column_width=True)
+                        
+                        with col2:
+                            right_eyebrow_mask = facer_result.get('right_eyebrow_mask')
+                            if right_eyebrow_mask is not None:
+                                st.image(right_eyebrow_mask, caption="Right Eyebrow Mask", use_column_width=True)
+                        
+                        # Display the extracted eyebrow area
+                        st.subheader("Extracted Eyebrows")
+                        combined_mask = facer_result.get('combined_eyebrow_mask')
+                        if combined_mask is not None:
+                            # Extract the eyebrow area
+                            eyebrow_area = facer_segmenter.extract_eyebrow_area(cropped_face, combined_mask)
+                            st.image(eyebrow_area, caption="Extracted Eyebrow Area", use_column_width=True)
+                        
+                        # Technical information
+                        with st.expander("Technical Information"):
+                            st.markdown("""
+                            **Facer Segmentation Details:**
+                            - Model: FaRL (Face Representation Learning)
+                            - Dataset: LaPa (Large-scale face parsing dataset)
+                            - Resolution: 448x448
+                            - Features: Provides detailed segmentation of facial features including eyebrows, eyes, nose, mouth, etc.
+                            """)
+                            
+                            # Display the class mapping
+                            class_mapping = facer_result.get('class_mapping', {})
+                            if class_mapping:
+                                st.markdown("**Class Mapping:**")
+                                for part_name, class_idx in class_mapping.items():
+                                    st.markdown(f"- {class_idx}: {part_name}")
+                    else:
+                        st.error(f"Facer segmentation failed: {facer_result.get('error', 'Unknown error')}")
+                else:
+                    st.error("No face crop available. Please make sure face detection succeeded.")
+            except Exception as e:
+                st.error(f"Facer segmentation failed: {e}\nMake sure facer_segmentation.py is properly set up and facer is installed.")
+        
+        with tab6:
             # Detailed View tab
             st.header("Detailed View")
             
