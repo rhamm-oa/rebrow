@@ -2,6 +2,6 @@ all_frontal
 rebrowenv
 data 
 __pycache__/
-face-parsing/assets/
 bisenet_results/
 face-parsing
+face-parsing/assets/ 
