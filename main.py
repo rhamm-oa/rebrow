@@ -713,10 +713,10 @@ if uploaded_file is not None:
                                 # Create masked image for display
                                 masked_right = cv2.bitwise_and(cropped_face, cropped_face, mask=right_eyebrow_mask)
                                 masked_right_pil = cv2_to_pil(masked_right)
-                                st.image(masked_right_pil, caption="Masked Right Eyebrow", use_container_width=True) # type: ignore
+                                st.image(masked_right_pil, caption="Masked Right Eyebrow", use_container_width=True)
                                 
-                                # Extract eyebrow hair colors using aggressive hair-only filtering
-                                right_colors, right_percentages, right_debug_images = color_analyzer.extract_eyebrow_hairs_only(cropped_face, right_eyebrow_mask, n_colors=3)
+                                # Extract eyebrow hair colors using reliable Otsu + K-means method
+                                right_colors, right_percentages, right_debug_images = color_analyzer.extract_reliable_hair_colors(cropped_face, right_eyebrow_mask, n_colors=3)
                                 
                                 # Store debug images for potential display
                                 results['right_debug_images'] = right_debug_images
@@ -744,20 +744,18 @@ if uploaded_file is not None:
                                             st.write("This shows how the algorithm isolates the hair strands for color analysis:")
                                             if 'original_masked' in right_debug_images:
                                                 st.image(right_debug_images['original_masked'], caption="Original Masked Region", use_container_width=True)
-                                            if 'dark_mask' in right_debug_images:
-                                                st.image(right_debug_images['dark_mask'], caption="Dark Pixels Only", use_container_width=True)
-                                            if 'edges' in right_debug_images:
-                                                st.image(right_debug_images['edges'], caption="Edge Detection", use_container_width=True)
-                                            if 'saturation_mask' in right_debug_images:
-                                                st.image(right_debug_images['saturation_mask'], caption="Saturation-based Mask", use_container_width=True)
-                                            if 'combined_mask' in right_debug_images:
-                                                st.image(right_debug_images['combined_mask'], caption="Combined Hair Mask", use_container_width=True)
-                                            if 'hair_mask' in right_debug_images:
-                                                st.image(right_debug_images['hair_mask'], caption="Refined Hair Mask", use_container_width=True)
+                                            if 'otsu_mask' in right_debug_images:
+                                                st.image(right_debug_images['otsu_mask'], caption="Otsu's Automatic Thresholding", use_container_width=True)
+                                            if 'refined_mask' in right_debug_images:
+                                                st.image(right_debug_images['refined_mask'], caption="Refined Hair Mask", use_container_width=True)
                                             if 'hair_pixels' in right_debug_images:
                                                 st.image(right_debug_images['hair_pixels'], caption="Isolated Hair Pixels", use_container_width=True)
                                             if 'fallback_mask' in right_debug_images:
-                                                st.image(right_debug_images['fallback_mask'], caption="Fallback Mask (Less Aggressive)", use_container_width=True)
+                                                st.image(right_debug_images['fallback_mask'], caption="Fallback Mask (Fixed Threshold)", use_container_width=True)
+                                            if 'fallback_pixels' in right_debug_images:
+                                                st.image(right_debug_images['fallback_pixels'], caption="Fallback Hair Pixels", use_container_width=True)
+                                            if 'using_whole_mask' in right_debug_images:
+                                                st.image(right_debug_images['using_whole_mask'], caption="Using Whole Mask (Last Resort)", use_container_width=True)
                                 else:
                                     st.info("No color information available for the right eyebrow mask.")
                             else:
@@ -770,10 +768,10 @@ if uploaded_file is not None:
                                 # Create masked image for display
                                 masked_left = cv2.bitwise_and(cropped_face, cropped_face, mask=left_eyebrow_mask)
                                 masked_left_pil = cv2_to_pil(masked_left)
-                                st.image(masked_left_pil, caption="Masked Left Eyebrow", use_container_width=True) # type: ignore
+                                st.image(masked_left_pil, caption="Masked Left Eyebrow", use_container_width=True)
                                 
-                                # Extract eyebrow hair colors using aggressive hair-only filtering
-                                left_colors, left_percentages, left_debug_images = color_analyzer.extract_eyebrow_hairs_only(cropped_face, left_eyebrow_mask, n_colors=3)
+                                # Extract eyebrow hair colors using reliable Otsu + K-means method
+                                left_colors, left_percentages, left_debug_images = color_analyzer.extract_reliable_hair_colors(cropped_face, left_eyebrow_mask, n_colors=3)
                                 
                                 # Store debug images for potential display
                                 results['left_debug_images'] = left_debug_images
@@ -801,20 +799,18 @@ if uploaded_file is not None:
                                             st.write("This shows how the algorithm isolates the hair strands for color analysis:")
                                             if 'original_masked' in left_debug_images:
                                                 st.image(left_debug_images['original_masked'], caption="Original Masked Region", use_container_width=True)
-                                            if 'dark_mask' in left_debug_images:
-                                                st.image(left_debug_images['dark_mask'], caption="Dark Pixels Only", use_container_width=True)
-                                            if 'edges' in left_debug_images:
-                                                st.image(left_debug_images['edges'], caption="Edge Detection", use_container_width=True)
-                                            if 'saturation_mask' in left_debug_images:
-                                                st.image(left_debug_images['saturation_mask'], caption="Saturation-based Mask", use_container_width=True)
-                                            if 'combined_mask' in left_debug_images:
-                                                st.image(left_debug_images['combined_mask'], caption="Combined Hair Mask", use_container_width=True)
-                                            if 'hair_mask' in left_debug_images:
-                                                st.image(left_debug_images['hair_mask'], caption="Refined Hair Mask", use_container_width=True)
+                                            if 'otsu_mask' in left_debug_images:
+                                                st.image(left_debug_images['otsu_mask'], caption="Otsu's Automatic Thresholding", use_container_width=True)
+                                            if 'refined_mask' in left_debug_images:
+                                                st.image(left_debug_images['refined_mask'], caption="Refined Hair Mask", use_container_width=True)
                                             if 'hair_pixels' in left_debug_images:
                                                 st.image(left_debug_images['hair_pixels'], caption="Isolated Hair Pixels", use_container_width=True)
                                             if 'fallback_mask' in left_debug_images:
-                                                st.image(left_debug_images['fallback_mask'], caption="Fallback Mask (Less Aggressive)", use_container_width=True)
+                                                st.image(left_debug_images['fallback_mask'], caption="Fallback Mask (Fixed Threshold)", use_container_width=True)
+                                            if 'fallback_pixels' in left_debug_images:
+                                                st.image(left_debug_images['fallback_pixels'], caption="Fallback Hair Pixels", use_container_width=True)
+                                            if 'using_whole_mask' in left_debug_images:
+                                                st.image(left_debug_images['using_whole_mask'], caption="Using Whole Mask (Last Resort)", use_container_width=True)
                                 else:
                                     st.info("No color information available for the left eyebrow mask.")
                             else:
