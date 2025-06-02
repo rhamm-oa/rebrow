@@ -76,69 +76,62 @@ def process_image(image_path, face_detector, color_analyzer, facer_segmenter):
         left_colors, left_percentages, _ = color_analyzer.extract_reliable_hair_colors(face_crop, left_eyebrow_mask, n_colors=3)
         right_colors, right_percentages, _ = color_analyzer.extract_reliable_hair_colors(face_crop, right_eyebrow_mask, n_colors=3)
         
-        # Get color information in LAB format
-        left_color_info = color_analyzer.get_color_info(left_colors, left_percentages)
-        right_color_info = color_analyzer.get_color_info(right_colors, right_percentages)
+        # Get detailed color information for left eyebrow
+        left_color_details_list = []
+        if left_colors is not None and left_percentages is not None and len(left_colors) > 0:
+            left_color_details_list = color_analyzer.get_color_info(left_colors, left_percentages)
+        
+        # Get detailed color information for right eyebrow
+        right_color_details_list = []
+        if right_colors is not None and right_percentages is not None and len(right_colors) > 0:
+            right_color_details_list = color_analyzer.get_color_info(right_colors, right_percentages)
+
+        if not left_color_details_list and not right_color_details_list:
+            print(f"No valid color details extracted for left or right eyebrows in {image_path}.")
+            return None
+
+        # Extract filename without extension
+        filename = os.path.splitext(os.path.basename(image_path))[0]
+        
+        result_data = {'image_filename': filename}
+
+        # Helper function to populate data for an eyebrow
+        def _populate_eyebrow_data_for_csv(color_details_list_param, prefix, data_dict_to_fill):
+            for i in range(3): # For up to 3 dominant colors
+                if i < len(color_details_list_param):
+                    details = color_details_list_param[i]
+                    # Ensure 'lab' key exists and is not None, and has 3 components
+                    if 'lab' in details and details['lab'] and isinstance(details['lab'], (list, tuple)) and len(details['lab']) == 3:
+                        data_dict_to_fill[f'{prefix}_color{i+1}_L'] = details['lab'][0]
+                        data_dict_to_fill[f'{prefix}_color{i+1}_a'] = details['lab'][1]
+                        data_dict_to_fill[f'{prefix}_color{i+1}_b'] = details['lab'][2]
+                    else:
+                        data_dict_to_fill[f'{prefix}_color{i+1}_L'] = np.nan
+                        data_dict_to_fill[f'{prefix}_color{i+1}_a'] = np.nan
+                        data_dict_to_fill[f'{prefix}_color{i+1}_b'] = np.nan
+                    
+                    percentage_str = details.get('percentage') # Safely get percentage
+                    if percentage_str:
+                        try:
+                            data_dict_to_fill[f'{prefix}_color{i+1}_percentage'] = float(percentage_str.strip('%'))
+                        except (ValueError, TypeError):
+                            data_dict_to_fill[f'{prefix}_color{i+1}_percentage'] = np.nan
+                    else: # If percentage key is missing or value is None/empty
+                        data_dict_to_fill[f'{prefix}_color{i+1}_percentage'] = np.nan
+                else: # If fewer than 3 colors, fill with NaN
+                    data_dict_to_fill[f'{prefix}_color{i+1}_L'] = np.nan
+                    data_dict_to_fill[f'{prefix}_color{i+1}_a'] = np.nan
+                    data_dict_to_fill[f'{prefix}_color{i+1}_b'] = np.nan
+                    data_dict_to_fill[f'{prefix}_color{i+1}_percentage'] = np.nan
+        
+        _populate_eyebrow_data_for_csv(left_color_details_list, 'left_eyebrow', result_data)
+        _populate_eyebrow_data_for_csv(right_color_details_list, 'right_eyebrow', result_data)
+        
+        return result_data
         
     except Exception as e:
-        print(f"Facer segmentation failed for {image_path}: {e}")
+        print(f"Facer segmentation or subsequent color processing failed for {image_path}: {e}")
         return None
-    
-    # Combine left and right eyebrow colors (average them)
-    combined_color_info = []
-    
-    # Make sure we have both left and right color info
-    if left_color_info and right_color_info:
-        # Use the minimum number of colors available from both eyebrows
-        num_colors = min(len(left_color_info), len(right_color_info))
-        
-        for i in range(num_colors):
-            left_lab = left_color_info[i]['lab']
-            right_lab = right_color_info[i]['lab']
-            
-            # Average the LAB values
-            avg_l = (left_lab[0] + right_lab[0]) / 2
-            avg_a = (left_lab[1] + right_lab[1]) / 2
-            avg_b = (left_lab[2] + right_lab[2]) / 2
-            
-            combined_color_info.append({
-                'lab': (round(avg_l, 1), round(avg_a, 1), round(avg_b, 1)),
-                'percentage': (float(left_color_info[i]['percentage'].strip('%')) + 
-                              float(right_color_info[i]['percentage'].strip('%'))) / 2
-            })
-    elif left_color_info:
-        combined_color_info = left_color_info
-    elif right_color_info:
-        combined_color_info = right_color_info
-    else:
-        print(f"No color information extracted for {image_path}")
-        return None
-    
-    # Ensure we have exactly 3 colors (pad with zeros if needed)
-    while len(combined_color_info) < 3:
-        combined_color_info.append({
-            'lab': (0, 0, 0),
-            'percentage': '0.0%'
-        })
-    
-    # Extract filename without extension
-    filename = os.path.splitext(os.path.basename(image_path))[0]
-    
-    # Return the filename and LAB values for the three dominant colors
-    result = {
-        'filename': filename,
-        'l1': combined_color_info[0]['lab'][0],
-        'a1': combined_color_info[0]['lab'][1],
-        'b1': combined_color_info[0]['lab'][2],
-        'l2': combined_color_info[1]['lab'][0],
-        'a2': combined_color_info[1]['lab'][1],
-        'b2': combined_color_info[1]['lab'][2],
-        'l3': combined_color_info[2]['lab'][0],
-        'a3': combined_color_info[2]['lab'][1],
-        'b3': combined_color_info[2]['lab'][2],
-    }
-    
-    return result
 
 def main():
     # Parse command line arguments
