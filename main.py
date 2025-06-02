@@ -257,7 +257,7 @@ if uploaded_file is not None:
     
     if results:
         # Create tabs for different analyses
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Shape Analysis", "Facer Segmentation", "Virtual Try-On", "Detailed View"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Shape Analysis", "Facer Segmentation + Color analysis", "Virtual Try-On", "Detailed View"])
         
         
         with tab1:
@@ -593,9 +593,9 @@ if uploaded_file is not None:
                 
                 if cropped_face is not None and left_eyebrow_mask is not None and right_eyebrow_mask is not None:
                     # Display original image
-                    st.subheader("Original Image")
-                    original_face_rgb = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
-                    st.image(original_face_rgb, caption="Original Face", use_container_width=True)
+                    # st.subheader("Original Image")
+                    # original_face_rgb = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
+                    # st.image(original_face_rgb, caption="Original Face", use_container_width=True)
                     
                     # Pre-defined color palette
                     color_palette = eyebrow_recoloring.create_color_palette(n_colors=6)
