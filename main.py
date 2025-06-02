@@ -4,6 +4,9 @@ import numpy as np
 import os
 from PIL import Image
 import io
+import streamlit as st
+import json
+import plotly.graph_objects as go
 
 # Import custom modules
 from face_detection import FaceDetector
@@ -11,6 +14,7 @@ from eyebrow_segmentation import EyebrowSegmentation
 from color_analysis import ColorAnalysis
 from shape_analysis import ShapeAnalysis
 from facer_segmentation import FacerSegmentation
+from eyebrow_recoloring import EyebrowRecoloring
 
 # Set page config
 st.set_page_config(
@@ -34,6 +38,7 @@ eyebrow_segmentation = EyebrowSegmentation()
 color_analyzer = ColorAnalysis()
 shape_analyzer = ShapeAnalysis()
 facer_segmenter = FacerSegmentation()
+eyebrow_recoloring = EyebrowRecoloring()
 
 # Function to convert OpenCV image to PIL Image
 def cv2_to_pil(cv2_img):
@@ -213,7 +218,29 @@ def process_image(image):
     return results
 
 # File uploader
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"], key="image_uploader")
+
+# Reset session state when a new image is uploaded
+if 'last_uploaded_file' not in st.session_state:
+    st.session_state.last_uploaded_file = None
+
+# Check if the uploaded file has changed
+if uploaded_file is not None and (st.session_state.last_uploaded_file is None or 
+                                 uploaded_file.name != st.session_state.last_uploaded_file):
+    # Reset all caching variables when a new image is uploaded
+    st.session_state.face_crop_cache = None
+    st.session_state.left_mask_cache = None
+    st.session_state.right_mask_cache = None
+    st.session_state.recolored_images = {}
+    st.session_state.has_run_facer = False
+    if 'original_results' in st.session_state:
+        del st.session_state.original_results
+    
+    # Update the last uploaded file
+    st.session_state.last_uploaded_file = uploaded_file.name
+    
+    # Display a message about the new image
+    st.success(f"New image loaded: {uploaded_file.name}")
 
 # Process the uploaded image
 if uploaded_file is not None:
@@ -227,7 +254,7 @@ if uploaded_file is not None:
     
     if results:
         # Create tabs for different analyses
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Overview", "Color Analysis", "Shape Analysis", "Deep Segmentation (BiSeNet)", "Facer Segmentation", "Detailed View"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Shape Analysis", "Facer Segmentation", "Virtual Try-On", "Detailed View"])
         
         
         with tab1:
@@ -266,165 +293,8 @@ if uploaded_file is not None:
                 eyebrow_landmarks_image_pil = cv2_to_pil(results['eyebrow_landmarks_image'])
                 if eyebrow_landmarks_image_pil is not None:
                     st.image(eyebrow_landmarks_image_pil, use_container_width=True)
-        with tab2:
-            # Color Analysis tab
-            st.header("Color Analysis")
-            
-
-            
-            # Check if BiSeNet results are available
-            bisenet_available = 'bisenet_left_mask' in results and 'bisenet_right_mask' in results
-            
-            # Add a toggle to switch between traditional and BiSeNet color analysis
-            use_bisenet = False
-            if bisenet_available:
-                use_bisenet = st.checkbox("Use BiSeNet segmentation for color analysis", value=True, 
-                                         help="Toggle to switch between traditional and BiSeNet-based color analysis")
-            
-            # Select the appropriate data based on the toggle
-            if use_bisenet and bisenet_available:
-                left_mask_display = results['bisenet_left_mask']
-                right_mask_display = results['bisenet_right_mask']
-                left_palette_display = results['bisenet_left_palette']
-                right_palette_display = results['bisenet_right_palette']
-                left_color_info_display = results['bisenet_left_color_info']
-                right_color_info_display = results['bisenet_right_color_info']
-                left_color_props = color_analyzer.analyze_color_properties(results['bisenet_left_colors']) if 'bisenet_left_colors' in results else []
-                right_color_props = color_analyzer.analyze_color_properties(results['bisenet_right_colors']) if 'bisenet_right_colors' in results else []
-                st.success("Using BiSeNet segmentation for more accurate color analysis")
-            else:
-                left_mask_display = results['left_refined_mask']
-                right_mask_display = results['right_refined_mask']
-                left_palette_display = results['left_palette']
-                right_palette_display = results['right_palette']
-                left_color_info_display = results['left_color_info']
-                right_color_info_display = results['right_color_info']
-                left_color_props = results['left_color_properties'] if 'left_color_properties' in results else []
-                right_color_props = results['right_color_properties'] if 'right_color_properties' in results else []
-                if bisenet_available:
-                    st.info("Using traditional segmentation for color analysis")
-            
-            # Create combined mask for visualization
-            combined_mask = None
-            if left_mask_display is not None and right_mask_display is not None:
-                combined_mask = cv2.bitwise_or(left_mask_display, right_mask_display)
-                
-                # Show combined mask
-                st.subheader("Combined Eyebrow Mask")
-                
-                # Show original and masked images side by side
-                col_orig, col_mask = st.columns(2)
-                with col_orig:
-                    st.subheader("Original Image")
-                    st.image(cv2_to_pil(results['face_crop']) or Image.new('RGB', (100, 100)), use_container_width=True)
-                
-                with col_mask:
-                    st.subheader("Combined Mask")
-                    # Apply combined mask to original image
-                    if combined_mask is not None:
-                        masked_combined = cv2.bitwise_and(results['face_crop'], results['face_crop'], mask=combined_mask)
-                        st.image(cv2_to_pil(masked_combined) or Image.new('RGB', (100, 100)), use_container_width=True)
-            
-            # Display eyebrow regions and color palettes
-            col1, col2 = st.columns(2)
-            
-            # Right eyebrow of the person (appears on left side of the screen)
-            with col1:
-                st.subheader("Right Eyebrow of Person")
-                
-                # Show original and masked images side by side
-                col_orig_right, col_mask_right = st.columns(2)
-                
-                with col_orig_right:
-                    st.subheader("Original")
-                    # Show the original image
-                    orig_right_pil = cv2_to_pil(results['face_crop'])
-                    if orig_right_pil is not None:
-                        st.image(orig_right_pil, use_container_width=True)
-                
-                with col_mask_right:
-                    st.subheader("Mask")
-                    # Display the mask applied to the original image
-                    if right_mask_display is not None:
-                        # Apply mask to original image for better visualization
-                        masked_right = cv2.bitwise_and(results['face_crop'], results['face_crop'], mask=right_mask_display)
-                        masked_right_pil = cv2_to_pil(masked_right)
-                        if masked_right_pil is not None:
-                            st.image(masked_right_pil, use_container_width=True)
-                
-                st.subheader("Dominant Colors")
-                if right_palette_display is not None:
-                    st.image(right_palette_display, channels="BGR")
-                
-                st.subheader("Color Information")
-                if right_color_info_display:
-                    for i, color_info in enumerate(right_color_info_display):
-                        st.write(f"Color {i+1}: {color_info['percentage']}")
-                        st.write(f"RGB: {color_info['rgb']}, HEX: {color_info['hex']}")
-                        st.write(f"LAB: {color_info['lab']}")
-                        st.write(f"LCH: {color_info['lch']}")
-                        st.write(f"HSV: {color_info['hsv']}")
-                        # Create a color swatch using HTML
-                        st.markdown(f"<div style='background-color: {color_info['hex']}; width: 100%; height: 30px; margin-bottom: 10px;'></div>", unsafe_allow_html=True)
-                        
-                        # Add color properties directly under each color
-                        if right_color_props and i < len(right_color_props):
-                            st.markdown("**Color Properties:**")
-                            st.markdown(f"- Brightness: {right_color_props[i]['brightness']}")
-                            st.markdown(f"- Saturation: {right_color_props[i]['saturation']}")
-                            st.markdown(f"- Intensity: {right_color_props[i]['intensity']}")
-                            st.markdown(f"- Tone: {right_color_props[i]['tone']}")
-                            st.markdown("---")
-            
-            # Left eyebrow of the person (appears on right side of the screen)
-            with col2:
-                st.subheader("Left Eyebrow of Person")
-                
-                # Show original and masked images side by side
-                col_orig_left, col_mask_left = st.columns(2)
-                
-                with col_orig_left:
-                    st.subheader("Original")
-                    # Show the original image
-                    orig_left_pil = cv2_to_pil(results['face_crop'])
-                    if orig_left_pil is not None:
-                        st.image(orig_left_pil, use_container_width=True)
-                
-                with col_mask_left:
-                    st.subheader("Mask")
-                    # Display the mask applied to the original image
-                    if left_mask_display is not None:
-                        # Apply mask to original image for better visualization
-                        masked_left = cv2.bitwise_and(results['face_crop'], results['face_crop'], mask=left_mask_display)
-                        masked_left_pil = cv2_to_pil(masked_left)
-                        if masked_left_pil is not None:
-                            st.image(masked_left_pil, use_container_width=True)
-                
-                st.subheader("Dominant Colors")
-                if left_palette_display is not None:
-                    st.image(left_palette_display, channels="BGR")
-                
-                st.subheader("Color Information")
-                if left_color_info_display:
-                    for i, color_info in enumerate(left_color_info_display):
-                        st.write(f"Color {i+1}: {color_info['percentage']}")
-                        st.write(f"RGB: {color_info['rgb']}, HEX: {color_info['hex']}")
-                        st.write(f"LAB: {color_info['lab']}")
-                        st.write(f"LCH: {color_info['lch']}")
-                        st.write(f"HSV: {color_info['hsv']}")
-                        # Create a color swatch using HTML
-                        st.markdown(f"<div style='background-color: {color_info['hex']}; width: 100%; height: 30px; margin-bottom: 10px;'></div>", unsafe_allow_html=True)
-                        
-                        # Add color properties directly under each color
-                        if left_color_props and i < len(left_color_props):
-                            st.markdown("**Color Properties:**")
-                            st.markdown(f"- Brightness: {left_color_props[i]['brightness']}")
-                            st.markdown(f"- Saturation: {left_color_props[i]['saturation']}")
-                            st.markdown(f"- Intensity: {left_color_props[i]['intensity']}")
-                            st.markdown(f"- Tone: {left_color_props[i]['tone']}")
-                            st.markdown("---")
         
-        with tab3:
+        with tab2:
             # Shape Analysis tab
             st.header("Shape Analysis")
             
@@ -469,187 +339,22 @@ if uploaded_file is not None:
                     st.markdown(f"- Curvature: {results['right_shape_info']['curvature']:.2f} radians")
                     st.markdown(f"- Compactness: {results['right_shape_info']['compactness']:.2f}")
                     st.markdown(f"- Convexity: {results['right_shape_info']['convexity']:.2f}")
-        
-        with tab4:
-            # Deep Eyebrow Segmentation (BiSeNet) tab
-            st.header("Deep Eyebrow Segmentation (BiSeNet)")
-            st.markdown("""
-                This tab uses a deep neural network (BiSeNet) for state-of-the-art eyebrow segmentation. Results are robust for all skin tones and lighting conditions.
-            """)
-            # Create a placeholder for status messages
-            status_placeholder = st.empty()
-            status_placeholder.info("Preparing to run BiSeNet segmentation...")
-            
-            try:
-                from bisenet_integration import segment_eyebrows_with_bisenet, create_eyebrow_overlay, extract_eyebrow_masks_from_raw_segmentation, extract_only_eyebrows
-                import tempfile
-                
-                # Save cropped face image to a temp file
-                cropped_face = results.get('face_crop', None)
-                if cropped_face is None:
-                    st.error('No cropped face available. Cannot run BiSeNet segmentation.')
-                    st.stop()
-                
-                # Create a temporary file for the cropped face
-                tmp_img_path = None
-                try:
-                    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_img:
-                        status_placeholder.info("Saving temporary image for processing...")
-                        cv2.imwrite(tmp_img.name, cropped_face)
-                        tmp_img_path = tmp_img.name
-                        status_placeholder.info(f"Temporary image saved at: {tmp_img_path}")
-                except Exception as e:
-                    st.error(f"Failed to create temporary file: {e}")
-                    st.stop()
-                
-                # Show a spinner while processing
-                with st.spinner('Running BiSeNet segmentation...'):
-                    status_placeholder.info("Running BiSeNet segmentation - this may take a moment...")
-                    
-                    # Run BiSeNet segmentation using the simplified function
-                    segmentation_image, raw_segmentation = segment_eyebrows_with_bisenet(tmp_img_path, target_shape=cropped_face.shape)
-                    status_placeholder.success(f"BiSeNet segmentation completed successfully!")
-                    
-                    # Clean up the temporary file
-                    if tmp_img_path and os.path.exists(tmp_img_path):
-                        os.remove(tmp_img_path)
-                
-                # Display information about the segmentation image
-                status_placeholder.info(f"Segmentation image shape: {segmentation_image.shape}, dtype: {segmentation_image.dtype}")
-                status_placeholder.info(f"Raw segmentation shape: {raw_segmentation.shape}, dtype: {raw_segmentation.dtype}")
-                
-                # Store the raw segmentation for visualization
-                results['bisenet_segmentation_image'] = segmentation_image
-                results['bisenet_raw_segmentation'] = raw_segmentation
-                
-                # Create a more visually appealing segmentation visualization using the common approach
-                from bisenet_integration import visualize_segmentation, extract_eyebrows_common_approach
-                
-                # Create enhanced visualization using the common approach from face-parsing/utils
-                blended_visualization, eyebrow_mask = extract_eyebrows_common_approach(raw_segmentation, cropped_face)
-                results['bisenet_enhanced_visualization'] = blended_visualization
-                results['bisenet_eyebrow_mask'] = eyebrow_mask
-                
-                # Also create a standard visualization for comparison
-                standard_visualization = visualize_segmentation(raw_segmentation)
-                results['bisenet_standard_visualization'] = standard_visualization
-                
-                # Display the original image and segmentation side by side
-                st.subheader("Original Image vs BiSeNet Segmentation")
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.image(cropped_face, channels="BGR", caption="Original Image")
-                with col2:
-                    st.image(segmentation_image, channels="BGR", caption="BiSeNet Face Parsing Result")
-                
-                # Display enhanced visualization
-                st.subheader("Enhanced BiSeNet Visualization")
-                if 'bisenet_enhanced_visualization' in results and results['bisenet_enhanced_visualization'] is not None:
-                    enhanced_vis_pil = cv2_to_pil(results['bisenet_enhanced_visualization'])
-                    if enhanced_vis_pil is not None:
-                        st.image(enhanced_vis_pil, caption="Enhanced Segmentation Visualization")
-                else:
-                    st.warning("Enhanced visualization not available")
-                
-                # Display the segmentation classes explanation
-                st.subheader("Segmentation Classes")
-                st.markdown("""
-                The BiSeNet face parsing model segments the face into different regions, each with a unique class index:
-                
-                - Skin (blue)
-                - Eyebrows (purple/teal)
-                - Eyes (green/pink)
-                - Nose (red)
-                - Lips (orange/red)
-                - Hair (light green)
-                
-                The exact colors may vary depending on the model version.
-                """)
-                
-                # Add information about the segmentation indices
-                st.subheader("Technical Information")
-                st.markdown("""
-                The BiSeNet model used in this application produces class indices in the range 36-237, 
-                which differs from the standard BiSeNet model that uses indices 0-15.
-                
-                Based on our analysis, the eyebrow classes in this model are approximately:
-                - Left eyebrow: class 127
-                - Right eyebrow: class 129
-                
-                However, the segmentation results may vary depending on lighting, pose, and other factors.
-                """)
-                
-                # Add a button to print all indices to console for research
-                if st.button("Print segmentation indices to console", key="bisenet_print_indices"):
-                    unique_indices = np.unique(raw_segmentation)
-                    print("\n\nAll unique indices in raw segmentation:")
-                    print(unique_indices)
-                    st.success("Indices printed to console. Check your terminal/console output.")
-                
-                # Add a note about the segmentation result
-                st.markdown("---")
-                st.write("BiSeNet provides a detailed facial segmentation with different colors representing different facial features.")
-                st.write("The extracted eyebrow masks are used for more accurate color analysis.")
-                st.write("You can use this segmentation as a reference for further analysis.")
-                
-                # Add a separator before the explanation
-                st.markdown("---")
-                
-                # Add a debug visualization section
-                st.header("Segmentation Debug Visualizations")
-                
-                # Add a toggle for showing debug visualizations
-                show_debug = st.checkbox("Show debug visualizations", value=False)
-                
-                if show_debug and 'bisenet_raw_segmentation' in results:
-                    # Create visualization of raw segmentation
-                    from bisenet_integration import visualize_segmentation, create_mask_visualization
-                    
-                    # Display raw segmentation visualization
-                    st.subheader("Raw Segmentation Classes")
-                    raw_vis = visualize_segmentation(results['bisenet_raw_segmentation'])
-                    st.image(raw_vis, channels="BGR")
-                    
-                    # Display mask visualizations
-                    st.subheader("Eyebrow Mask Visualizations")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.subheader("Left Eyebrow Mask")
-                        if 'left_eyebrow_mask' in results:
-                            # Create visualization of left eyebrow mask
-                            left_vis = create_mask_visualization(
-                                results['face_crop'], 
-                                results['left_eyebrow_mask'], 
-                                color=(255, 170, 0),  # Orange
-                                alpha=0.5
-                            )
-                            st.image(left_vis, channels="BGR")
-                        else:
-                            st.warning("Left eyebrow mask not available.")
-                    
-                    with col2:
-                        st.subheader("Right Eyebrow Mask")
-                        if 'right_eyebrow_mask' in results:
-                            # Create visualization of right eyebrow mask
-                            right_vis = create_mask_visualization(
-                                results['face_crop'], 
-                                results['right_eyebrow_mask'], 
-                                color=(255, 0, 85),  # Pink
-                                alpha=0.5
-                            )
-                            st.image(right_vis, channels="BGR")
-                        else:
-                            st.warning("Right eyebrow mask not available.")
-            except Exception as e:
-                st.error(f"BiSeNet segmentation failed: {e}\nMake sure bisenet_integration.py, face-parsing, and weights are properly set up.")
+
+# Commented out BiSeNet code
+# try:
+#     from bisenet_integration import segment_eyebrows_with_bisenet, create_eyebrow_overlay, extract_eyebrow_masks_from_raw_segmentation, extract_only_eyebrows
+#     import tempfile
+#     # ... rest of BiSeNet code
+# except Exception as e:
+#     st.error(f"BiSeNet segmentation failed: {e}\nMake sure bisenet_integration.py, face-parsing, and weights are properly set up.")
         
 
-        with tab5:
+        with tab3:
             # Facer Segmentation tab
             st.header("Facer Segmentation")
             st.markdown("""
                 This tab uses the Facer library for advanced face parsing and eyebrow segmentation. 
+                Facer provides more accurate segmentation than traditional methods.
             """)
             
             try:
@@ -706,94 +411,48 @@ if uploaded_file is not None:
                         
                         color_col1, color_col2 = st.columns(2)
                         
-                        # Right Eyebrow Color Analysis
+                        # Left Eyebrow Color Analysis (Now in color_col1)
                         with color_col1:
-                            st.subheader("Right Eyebrow Colors")
-                            if cropped_face is not None and right_eyebrow_mask is not None:
-                                # Create masked image for display
-                                masked_right = cv2.bitwise_and(cropped_face, cropped_face, mask=right_eyebrow_mask)
-                                masked_right_pil = cv2_to_pil(masked_right)
-                                st.image(masked_right_pil, caption="Masked Right Eyebrow", use_container_width=True)
-                                
-                                # Extract eyebrow hair colors using reliable Otsu + K-means method
-                                right_colors, right_percentages, right_debug_images = color_analyzer.extract_reliable_hair_colors(cropped_face, right_eyebrow_mask, n_colors=3)
-                                
-                                # Store debug images for potential display
-                                results['right_debug_images'] = right_debug_images
-                                right_palette = color_analyzer.create_color_palette(right_colors, right_percentages)
-                                right_color_info = color_analyzer.get_color_info(right_colors, right_percentages)
-                                
-                                # Display color palette
-                                if right_palette is not None:
-                                    st.image(right_palette, channels="BGR", caption="Dominant Colors Palette")
-                                
-                                # Display color information
-                                if right_color_info:
-                                    for i, color_info in enumerate(right_color_info):
-                                        st.write(f"Color {i+1}: {color_info['percentage']}")
-                                        st.write(f"RGB: {color_info['rgb']}, HEX: {color_info['hex']}")
-                                        st.write(f"LAB: {color_info['lab']}")
-                                        st.write(f"LCH: {color_info['lch']}")
-                                        st.write(f"HSV: {color_info['hsv']}")
-                                        st.markdown(f"<div style='background-color: {color_info['hex']}; width: 100%; height: 30px; margin-bottom: 10px;'></div>", unsafe_allow_html=True)
-                                        st.markdown("---")
-                                    
-                                    # Add debug view in an expander
-                                    if right_debug_images:
-                                        with st.expander("View Hair Detection Process"):
-                                            st.write("This shows how the algorithm isolates the hair strands for color analysis:")
-                                            if 'original_masked' in right_debug_images:
-                                                st.image(right_debug_images['original_masked'], caption="Original Masked Region", use_container_width=True)
-                                            if 'otsu_mask' in right_debug_images:
-                                                st.image(right_debug_images['otsu_mask'], caption="Otsu's Automatic Thresholding", use_container_width=True)
-                                            if 'refined_mask' in right_debug_images:
-                                                st.image(right_debug_images['refined_mask'], caption="Refined Hair Mask", use_container_width=True)
-                                            if 'hair_pixels' in right_debug_images:
-                                                st.image(right_debug_images['hair_pixels'], caption="Isolated Hair Pixels", use_container_width=True)
-                                            if 'fallback_mask' in right_debug_images:
-                                                st.image(right_debug_images['fallback_mask'], caption="Fallback Mask (Fixed Threshold)", use_container_width=True)
-                                            if 'fallback_pixels' in right_debug_images:
-                                                st.image(right_debug_images['fallback_pixels'], caption="Fallback Hair Pixels", use_container_width=True)
-                                            if 'using_whole_mask' in right_debug_images:
-                                                st.image(right_debug_images['using_whole_mask'], caption="Using Whole Mask (Last Resort)", use_container_width=True)
-                                else:
-                                    st.info("No color information available for the right eyebrow mask.")
-                            else:
-                                st.warning("Right eyebrow mask or face crop not available.")
-                        
-                        # Left Eyebrow Color Analysis
-                        with color_col2:
                             st.subheader("Left Eyebrow Colors")
                             if cropped_face is not None and left_eyebrow_mask is not None:
-                                # Create masked image for display
                                 masked_left = cv2.bitwise_and(cropped_face, cropped_face, mask=left_eyebrow_mask)
                                 masked_left_pil = cv2_to_pil(masked_left)
-                                st.image(masked_left_pil, caption="Masked Left Eyebrow", use_container_width=True)
+                                if masked_left_pil is not None:
+                                    st.image(masked_left_pil, caption="Masked Left Eyebrow", use_container_width=True)
                                 
-                                # Extract eyebrow hair colors using reliable Otsu + K-means method
                                 left_colors, left_percentages, left_debug_images = color_analyzer.extract_reliable_hair_colors(cropped_face, left_eyebrow_mask, n_colors=3)
-                                
-                                # Store debug images for potential display
                                 results['left_debug_images'] = left_debug_images
                                 left_palette = color_analyzer.create_color_palette(left_colors, left_percentages)
                                 left_color_info = color_analyzer.get_color_info(left_colors, left_percentages)
                                 
-                                # Display color palette
                                 if left_palette is not None:
-                                    st.image(left_palette, channels="BGR", caption="Dominant Colors Palette")
+                                    st.image(left_palette, channels="BGR", caption="Dominant Colors Palette (by percentage)") # Consistent caption
                                 
-                                # Display color information
                                 if left_color_info:
+                                    st.subheader("Detailed Color Analysis (sorted by percentage)") # Added subheader
                                     for i, color_info in enumerate(left_color_info):
-                                        st.write(f"Color {i+1}: {color_info['percentage']}")
-                                        st.write(f"RGB: {color_info['rgb']}, HEX: {color_info['hex']}")
-                                        st.write(f"LAB: {color_info['lab']}")
-                                        st.write(f"LCH: {color_info['lch']}")
-                                        st.write(f"HSV: {color_info['hsv']}")
-                                        st.markdown(f"<div style='background-color: {color_info['hex']}; width: 100%; height: 30px; margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+                                        # Standardized layout with swatch on left
+                                        detail_col_l1, detail_col_l2 = st.columns([1, 3])
+                                        with detail_col_l1:
+                                            st.markdown(f"<div style='background-color: {color_info['hex']}; width: 100%; height: 100px; border-radius: 5px;'></div>", unsafe_allow_html=True)
+                                        with detail_col_l2:
+                                            st.write(f"**Color {i+1}**: {color_info['percentage']}")
+                                            st.write(f"RGB: {color_info['rgb']}, HEX: {color_info['hex']}")
+                                            st.write(f"LAB: {color_info['lab']}")
+                                            st.write(f"LCH: {color_info['lch']}")
+                                            st.write(f"HSV: {color_info['hsv']}")
                                         st.markdown("---")
                                     
-                                    # Add debug view in an expander
+                                    # Added Interactive Visualizations for Left Eyebrow
+                                    st.subheader("Interactive Color Visualizations")
+                                    left_plotly_pie = color_analyzer.create_plotly_pie_chart(left_colors, left_percentages)
+                                    if left_plotly_pie is not None:
+                                        st.plotly_chart(go.Figure(json.loads(left_plotly_pie)), use_container_width=True)
+                                    left_lab_3d = color_analyzer.create_plotly_lab_3d(left_colors, left_percentages)
+                                    if left_lab_3d is not None:
+                                        st.plotly_chart(go.Figure(json.loads(left_lab_3d)), use_container_width=True)
+
+                                    # Debug view for Left Eyebrow
                                     if left_debug_images:
                                         with st.expander("View Hair Detection Process"):
                                             st.write("This shows how the algorithm isolates the hair strands for color analysis:")
@@ -815,6 +474,68 @@ if uploaded_file is not None:
                                     st.info("No color information available for the left eyebrow mask.")
                             else:
                                 st.warning("Left eyebrow mask or face crop not available.")
+
+                        # Right Eyebrow Color Analysis (Now in color_col2)
+                        with color_col2:
+                            st.subheader("Right Eyebrow Colors")
+                            if cropped_face is not None and right_eyebrow_mask is not None:
+                                masked_right = cv2.bitwise_and(cropped_face, cropped_face, mask=right_eyebrow_mask)
+                                masked_right_pil = cv2_to_pil(masked_right)
+                                if masked_right_pil is not None:
+                                    st.image(masked_right_pil, caption="Masked Right Eyebrow", use_container_width=True)
+                                
+                                right_colors, right_percentages, right_debug_images = color_analyzer.extract_reliable_hair_colors(cropped_face, right_eyebrow_mask, n_colors=3)
+                                results['right_debug_images'] = right_debug_images
+                                right_palette = color_analyzer.create_color_palette(right_colors, right_percentages)
+                                right_color_info = color_analyzer.get_color_info(right_colors, right_percentages)
+                                
+                                if right_palette is not None:
+                                    st.image(right_palette, channels="BGR", caption="Dominant Colors Palette (by percentage)")
+                                
+                                if right_color_info:
+                                    st.subheader("Detailed Color Analysis (sorted by percentage)")
+                                    for i, color_info in enumerate(right_color_info):
+                                        detail_col_r1, detail_col_r2 = st.columns([1, 3]) # Unique column names
+                                        with detail_col_r1:
+                                            st.markdown(f"<div style='background-color: {color_info['hex']}; width: 100%; height: 100px; border-radius: 5px;'></div>", unsafe_allow_html=True)
+                                        with detail_col_r2:
+                                            st.write(f"**Color {i+1}**: {color_info['percentage']}")
+                                            st.write(f"RGB: {color_info['rgb']}, HEX: {color_info['hex']}")
+                                            st.write(f"LAB: {color_info['lab']}")
+                                            st.write(f"LCH: {color_info['lch']}")
+                                            st.write(f"HSV: {color_info['hsv']}")
+                                        st.markdown("---")
+                                    
+                                    st.subheader("Interactive Color Visualizations")
+                                    right_plotly_pie = color_analyzer.create_plotly_pie_chart(right_colors, right_percentages)
+                                    if right_plotly_pie is not None:
+                                        st.plotly_chart(go.Figure(json.loads(right_plotly_pie)), use_container_width=True)
+                                    right_lab_3d = color_analyzer.create_plotly_lab_3d(right_colors, right_percentages)
+                                    if right_lab_3d is not None:
+                                        st.plotly_chart(go.Figure(json.loads(right_lab_3d)), use_container_width=True)
+
+                                    # Debug view for Right Eyebrow
+                                    if right_debug_images:
+                                        with st.expander("View Hair Detection Process"):
+                                            st.write("This shows how the algorithm isolates the hair strands for color analysis:")
+                                            if 'original_masked' in right_debug_images:
+                                                st.image(right_debug_images['original_masked'], caption="Original Masked Region", use_container_width=True)
+                                            if 'otsu_mask' in right_debug_images:
+                                                st.image(right_debug_images['otsu_mask'], caption="Otsu's Automatic Thresholding", use_container_width=True)
+                                            if 'refined_mask' in right_debug_images:
+                                                st.image(right_debug_images['refined_mask'], caption="Refined Hair Mask", use_container_width=True)
+                                            if 'hair_pixels' in right_debug_images:
+                                                st.image(right_debug_images['hair_pixels'], caption="Isolated Hair Pixels", use_container_width=True)
+                                            if 'fallback_mask' in right_debug_images:
+                                                st.image(right_debug_images['fallback_mask'], caption="Fallback Mask (Fixed Threshold)", use_container_width=True)
+                                            if 'fallback_pixels' in right_debug_images:
+                                                st.image(right_debug_images['fallback_pixels'], caption="Fallback Hair Pixels", use_container_width=True)
+                                            if 'using_whole_mask' in right_debug_images:
+                                                st.image(right_debug_images['using_whole_mask'], caption="Using Whole Mask (Last Resort)", use_container_width=True)
+                                else:
+                                    st.info("No color information available for the right eyebrow mask.")
+                            else:
+                                st.warning("Right eyebrow mask or face crop not available.")
                         
                         # Technical information
                         with st.expander("Technical Information"):
@@ -839,51 +560,280 @@ if uploaded_file is not None:
             except Exception as e:
                 st.error(f"Facer segmentation failed: {e}\nMake sure facer_segmentation.py is properly set up and facer is installed.")
         
-        with tab6:
+        with tab4:
+            # Virtual Try-On tab
+            st.header("Eyebrow Virtual Try-On")
+            st.markdown("""
+                This tab allows you to visualize how different eyebrow colors would look on your face.
+                Adjust the opacity slider to control the intensity of the color effect.
+            """)
+            
+            # Initialize session state for caching if not already done
+            if 'face_crop_cache' not in st.session_state:
+                st.session_state.face_crop_cache = None
+            if 'left_mask_cache' not in st.session_state:
+                st.session_state.left_mask_cache = None
+            if 'right_mask_cache' not in st.session_state:
+                st.session_state.right_mask_cache = None
+            if 'recolored_images' not in st.session_state:
+                st.session_state.recolored_images = {}
+            if 'has_run_facer' not in st.session_state:
+                st.session_state.has_run_facer = False
+            
+            try:
+                # Only run Facer once per session
+                if not st.session_state.has_run_facer:
+                    st.session_state.face_crop_cache = results.get('face_crop', None)
+                    st.session_state.left_mask_cache = results.get('facer_left_mask', None)
+                    st.session_state.right_mask_cache = results.get('facer_right_mask', None)
+                    st.session_state.has_run_facer = True
+                    
+                    # Store the original results to prevent recomputation
+                    if 'original_results' not in st.session_state:
+                        st.session_state.original_results = results.copy()
+                else:
+                    # Use the cached results instead of recomputing
+                    results = st.session_state.original_results
+                
+                # Use the cached values
+                cropped_face = st.session_state.face_crop_cache
+                left_eyebrow_mask = st.session_state.left_mask_cache
+                right_eyebrow_mask = st.session_state.right_mask_cache
+                
+                if cropped_face is not None and left_eyebrow_mask is not None and right_eyebrow_mask is not None:
+                    # Display original image
+                    st.subheader("Original Image")
+                    original_face_rgb = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
+                    st.image(original_face_rgb, caption="Original Face", use_container_width=True)
+                    
+                    # Pre-defined color palette
+                    color_palette = eyebrow_recoloring.create_color_palette(n_colors=6)
+                    color_names = ["Dark Brown", "Medium Brown", "Light Brown", "Black", "Blonde", "Light Blonde"]
+                    
+                    # Opacity control with key to prevent rerunning
+                    st.subheader("Color Intensity")
+                    opacity = st.slider("Opacity", 0.0, 1.0, 0.8, 0.05,
+                                      help="Control how strong the color effect is",
+                                      key="opacity_slider")
+                    
+                    # Pre-render all color variations
+                    st.subheader("Eyebrow Color Options")
+                    
+                    # Create two rows of 3 colors each
+                    row1, row2 = st.columns(3), st.columns(3)
+                    all_cols = [row1[0], row1[1], row1[2], row2[0], row2[1], row2[2]]
+                    
+                    # Clear cached images when opacity changes
+                    current_opacity_key = f"current_opacity_{opacity}"
+                    if 'last_opacity' not in st.session_state or st.session_state.last_opacity != opacity:
+                        st.session_state.recolored_images = {}  # Clear cache when opacity changes
+                        st.session_state.last_opacity = opacity
+                    
+                    for i, (color, name, col) in enumerate(zip(color_palette, color_names, all_cols)):
+                        # Create a unique key for this color
+                        color_key = f"{name}_{opacity}"
+                        
+                        # Check if we already have this color+opacity combination cached
+                        if color_key not in st.session_state.recolored_images:
+                            # Apply recoloring with this color
+                            recolored = eyebrow_recoloring.recolor_both_eyebrows(
+                                cropped_face, left_eyebrow_mask, right_eyebrow_mask, 
+                                color, preserve_highlights=True, preserve_texture=True, opacity=opacity
+                            )
+                            # Convert to RGB and cache the result
+                            recolored_rgb = cv2.cvtColor(recolored, cv2.COLOR_BGR2RGB)
+                            st.session_state.recolored_images[color_key] = recolored_rgb
+                        else:
+                            # Use the cached result
+                            recolored_rgb = st.session_state.recolored_images[color_key]
+                        
+                        # Display in the appropriate column
+                        with col:
+                            st.image(recolored_rgb, caption=name, use_container_width=True)
+                            
+                            # Show color swatch
+                            hex_color = f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}"
+                            st.markdown(f"<div style='background-color: {hex_color}; width: 100%; height: 20px; border-radius: 5px; margin-bottom: 15px;'></div>", 
+                                      unsafe_allow_html=True)
+                        
+                        # Technical explanation
+                        with st.expander("How it works"):
+                            st.markdown("""
+                            The virtual try-on feature works by:
+                            1. Using the accurate Facer segmentation masks to identify eyebrow pixels
+                            2. Applying color transformations only to those pixels
+                            3. Preserving the natural texture and highlights of your eyebrows
+                            4. Blending the new color with the original image
+                            
+                            This creates a realistic preview of how different eyebrow colors would look on your face.
+                            """)
+                    else:
+                        st.warning("Eyebrow masks not available. Please make sure Facer segmentation succeeded in the 'Facer Segmentation' tab.")
+                else:
+                    st.error("No face crop available. Please make sure face detection succeeded.")
+            except Exception as e:
+                st.error(f"Eyebrow recoloring failed: {e}\nMake sure eyebrow_recoloring.py is properly set up.")
+        
+        with tab5:
             # Detailed View tab
             st.header("Detailed View")
+            st.markdown("This tab provides a comprehensive summary of the eyebrow analysis results.")
             
-            st.subheader("Eyebrow Masks")
-            col1, col2 = st.columns(2)
+            # Summary section
+            st.subheader("Analysis Summary")
+            col_summary1, col_summary2 = st.columns(2)
             
-            with col1:
-                st.markdown("Left Eyebrow Mask")
-                left_mask = results.get('left_cropped_mask')
-                if left_mask is not None:
-                    st.image(left_mask, use_container_width=True)
+            with col_summary1:
+                st.markdown("### Left Eyebrow Summary")
+                if 'left_shape_info' in results:
+                    st.markdown(f"**Shape Type:** {results['left_shape_info'].get('shape', 'N/A')}")
+                    st.markdown(f"**Arch Type:** {results['left_shape_info'].get('arch_type', 'N/A')}")
+                    st.markdown(f"**Thickness:** {results['left_shape_info'].get('thickness', 0):.2f} pixels")
+                    st.markdown(f"**Curvature:** {results['left_shape_info'].get('curvature', 0):.2f} radians")
                 else:
-                    st.info("Left eyebrow mask not available.")
+                    st.info("Left eyebrow shape information not available.")
             
-            with col2:
-                st.markdown("Right Eyebrow Mask")
-                right_mask = results.get('right_cropped_mask')
-                if right_mask is not None:
-                    st.image(right_mask, use_container_width=True)
+            with col_summary2:
+                st.markdown("### Right Eyebrow Summary")
+                if 'right_shape_info' in results:
+                    st.markdown(f"**Shape Type:** {results['right_shape_info'].get('shape', 'N/A')}")
+                    st.markdown(f"**Arch Type:** {results['right_shape_info'].get('arch_type', 'N/A')}")
+                    st.markdown(f"**Thickness:** {results['right_shape_info'].get('thickness', 0):.2f} pixels")
+                    st.markdown(f"**Curvature:** {results['right_shape_info'].get('curvature', 0):.2f} radians")
                 else:
-                    st.info("Right eyebrow mask not available.")
+                    st.info("Right eyebrow shape information not available.")
             
-            st.subheader("Alpha Matting")
-            col3, col4 = st.columns(2)
+            # Shape visualization recap
+            st.subheader("Shape Analysis Recap")
+            col_shape1, col_shape2 = st.columns(2)
             
-            with col3:
-                st.markdown("Left Eyebrow Alpha Matte")
-                left_alpha = results.get('left_alpha')
-                if left_alpha is not None:
-                    left_alpha_pil = cv2_to_pil(left_alpha)
-                    if left_alpha_pil is not None:
-                        st.image(left_alpha_pil, use_container_width=True)
+            with col_shape1:
+                st.markdown("### Left Eyebrow Shape")
+                if 'left_shape_vis' in results and results['left_shape_vis'] is not None:
+                    left_shape_vis_pil = cv2_to_pil(results['left_shape_vis'])
+                    if left_shape_vis_pil is not None:
+                        st.image(left_shape_vis_pil, use_container_width=True)
                 else:
-                    st.info("Left eyebrow alpha matte not available.")
+                    st.info("Left eyebrow shape visualization not available.")
             
-            with col4:
-                st.markdown("Right Eyebrow Alpha Matte")
-                right_alpha = results.get('right_alpha')
-                if right_alpha is not None:
-                    right_alpha_pil = cv2_to_pil(right_alpha)
-                    if right_alpha_pil is not None:
-                        st.image(right_alpha_pil, use_container_width=True)
+            with col_shape2:
+                st.markdown("### Right Eyebrow Shape")
+                if 'right_shape_vis' in results and results['right_shape_vis'] is not None:
+                    right_shape_vis_pil = cv2_to_pil(results['right_shape_vis'])
+                    if right_shape_vis_pil is not None:
+                        st.image(right_shape_vis_pil, use_container_width=True)
                 else:
-                    st.info("Right eyebrow alpha matte not available.")
+                    st.info("Right eyebrow shape visualization not available.")
+            
+            # Facer segmentation recap
+            st.subheader("Facer Segmentation Recap")
+            
+            # Check if Facer results are available - using the correct key names from the Facer tab
+            # The visualization image is stored in facer_result and accessed with 'visualization_image'
+            facer_vis_img = None
+            for result_key in results:
+                if 'facer_result' in result_key and isinstance(results[result_key], dict):
+                    facer_vis_img = results[result_key].get('visualization_image')
+                    break
+            
+            # If we didn't find it that way, try the direct keys that might be stored
+            if facer_vis_img is None:
+                if 'visualization_image' in results:
+                    facer_vis_img = results['visualization_image']
+            
+            # Display the visualization image if available
+            if facer_vis_img is not None:
+                st.image(facer_vis_img, caption="Facer Segmentation Results", use_container_width=True)
+                
+                # Display eyebrow masks if available
+                col_facer1, col_facer2 = st.columns(2)
+                
+                with col_facer1:
+                    st.markdown("### Left Eyebrow Mask (Facer)")
+                    # Check for the correct mask key names
+                    left_mask = None
+                    if 'facer_left_mask' in results and results['facer_left_mask'] is not None:
+                        left_mask = results['facer_left_mask']
+                    
+                    if left_mask is not None:
+                        # Create masked image for display
+                        cropped_face = results.get('face_crop', None)
+                        if cropped_face is not None:
+                            masked_left = cv2.bitwise_and(cropped_face, cropped_face, mask=left_mask)
+                            masked_left_pil = cv2_to_pil(masked_left)
+                            if masked_left_pil is not None:
+                                st.image(masked_left_pil, use_container_width=True)
+                    else:
+                        st.info("Left eyebrow Facer mask not available.")
+                
+                with col_facer2:
+                    st.markdown("### Right Eyebrow Mask (Facer)")
+                    # Check for the correct mask key names
+                    right_mask = None
+                    if 'facer_right_mask' in results and results['facer_right_mask'] is not None:
+                        right_mask = results['facer_right_mask']
+                    
+                    if right_mask is not None:
+                        # Create masked image for display
+                        cropped_face = results.get('face_crop', None)
+                        if cropped_face is not None:
+                            masked_right = cv2.bitwise_and(cropped_face, cropped_face, mask=right_mask)
+                            masked_right_pil = cv2_to_pil(masked_right)
+                            if masked_right_pil is not None:
+                                st.image(masked_right_pil, use_container_width=True)
+                    else:
+                        st.info("Right eyebrow Facer mask not available.")
+            else:
+                # If we can't find the visualization image, look for the direct masks
+                if ('facer_left_mask' in results and results['facer_left_mask'] is not None) or \
+                   ('facer_right_mask' in results and results['facer_right_mask'] is not None):
+                    
+                    st.info("Facer segmentation visualization not available, but masks were found.")
+                    
+                    col_facer1, col_facer2 = st.columns(2)
+                    
+                    with col_facer1:
+                        st.markdown("### Left Eyebrow Mask (Facer)")
+                        if 'facer_left_mask' in results and results['facer_left_mask'] is not None:
+                            # Display the mask directly
+                            st.image(results['facer_left_mask'], caption="Left Eyebrow Mask", use_container_width=True)
+                            
+                            # Create masked image for display
+                            cropped_face = results.get('face_crop', None)
+                            if cropped_face is not None:
+                                masked_left = cv2.bitwise_and(cropped_face, cropped_face, mask=results['facer_left_mask'])
+                                masked_left_pil = cv2_to_pil(masked_left)
+                                if masked_left_pil is not None:
+                                    st.image(masked_left_pil, caption="Masked Left Eyebrow", use_container_width=True)
+                        else:
+                            st.info("Left eyebrow Facer mask not available.")
+                    
+                    with col_facer2:
+                        st.markdown("### Right Eyebrow Mask (Facer)")
+                        if 'facer_right_mask' in results and results['facer_right_mask'] is not None:
+                            # Display the mask directly
+                            st.image(results['facer_right_mask'], caption="Right Eyebrow Mask", use_container_width=True)
+                            
+                            # Create masked image for display
+                            cropped_face = results.get('face_crop', None)
+                            if cropped_face is not None:
+                                masked_right = cv2.bitwise_and(cropped_face, cropped_face, mask=results['facer_right_mask'])
+                                masked_right_pil = cv2_to_pil(masked_right)
+                                if masked_right_pil is not None:
+                                    st.image(masked_right_pil, caption="Masked Right Eyebrow", use_container_width=True)
+                        else:
+                            st.info("Right eyebrow Facer mask not available.")
+                else:
+                    st.info("Facer segmentation results not available. Please check the Facer Segmentation tab for details.")
+            
+            # Landmarks visualization
+            st.subheader("Eyebrow Landmarks")
+            if 'eyebrow_landmarks_image' in results and results['eyebrow_landmarks_image'] is not None:
+                eyebrow_landmarks_image_pil = cv2_to_pil(results['eyebrow_landmarks_image'])
+                if eyebrow_landmarks_image_pil is not None:
+                    st.image(eyebrow_landmarks_image_pil, caption="Eyebrow Landmarks", use_container_width=True)
+            else:
+                st.info("Eyebrow landmarks visualization not available.")
 
 
 

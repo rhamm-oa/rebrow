@@ -1,8 +1,16 @@
 import cv2
+import plotly
 import numpy as np
 from sklearn.cluster import KMeans
 from skimage import color
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+import pandas as pd
+import json
+from colormath.color_objects import sRGBColor, LabColor
+from colormath.color_conversions import convert_color
 
 # Import OpenCV's extra modules
 try:
@@ -101,6 +109,184 @@ class ColorAnalysis:
         palette = cv2.cvtColor(palette, cv2.COLOR_RGB2BGR)
         
         return palette
+        
+    def create_plotly_pie_chart(self, colors, percentages):
+        """Create an interactive Plotly pie chart visualization of the color distribution
+        
+        Args:
+            colors: Array of colors in RGB format
+            percentages: Percentage of each color
+            
+        Returns:
+            fig_json: JSON representation of the Plotly figure for Streamlit
+        """
+        if colors is None or percentages is None or len(colors) == 0:
+            return None
+            
+        # Convert RGB colors to hex for Plotly
+        hex_colors = [f'rgb({int(r)}, {int(g)}, {int(b)})' for r, g, b in colors]
+        
+        # Create labels with percentages
+        labels = [f'Color {i+1}: {p:.1f}%' for i, p in enumerate(percentages)]
+        
+        # Create the Plotly pie chart
+        fig = go.Figure(data=[go.Pie(
+            labels=labels,
+            values=percentages,
+            marker=dict(colors=hex_colors, line=dict(color='white', width=2)),
+            textinfo='label+percent',
+            insidetextorientation='radial',
+            textfont=dict(size=14, color='white'),
+            hoverinfo='label+percent',
+            hole=0.3
+        )])
+        
+        # Update layout for better appearance
+        fig.update_layout(
+            title={
+                'text': 'Eyebrow Color Distribution',
+                'y': 0.95,
+                'x': 0.5,
+                'xanchor': 'center',
+                'yanchor': 'top',
+                'font': dict(size=18)
+            },
+            showlegend=False,
+            height=400,
+            margin=dict(l=20, r=20, t=60, b=20),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
+        
+        # Convert to JSON for Streamlit
+        return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
+    
+    def create_plotly_lab_3d(self, colors, percentages):
+        """Create an interactive 3D visualization of colors in LAB color space
+        
+        Args:
+            colors: Array of colors in RGB format
+            percentages: Percentage of each color
+            
+        Returns:
+            fig_json: JSON representation of the Plotly figure for Streamlit
+        """
+        if colors is None or percentages is None or len(colors) == 0:
+            return None
+            
+        # Convert RGB colors to LAB
+        lab_values = []
+        rgb_hex = []
+        sizes = []
+        labels = []
+        
+        for i, (color, percentage) in enumerate(zip(colors, percentages)):
+            r, g, b = color
+            rgb_hex.append(f'rgb({int(r)}, {int(g)}, {int(b)})')
+            
+            # Convert to LAB using colormath
+            rgb_color = sRGBColor(r/255, g/255, b/255)
+            lab_color = convert_color(rgb_color, LabColor)
+            
+            lab_values.append([
+                lab_color.lab_l,  # L - Lightness
+                lab_color.lab_a,  # a - green to red
+                lab_color.lab_b   # b - blue to yellow
+            ])
+            
+            # Size based on percentage (scaled for visibility)
+            sizes.append(percentage * 5)
+            labels.append(f'Color {i+1}: {percentage:.1f}%<br>RGB: ({r},{g},{b})<br>LAB: ({lab_color.lab_l:.1f}, {lab_color.lab_a:.1f}, {lab_color.lab_b:.1f})')
+        
+        # Create a DataFrame for Plotly
+        df = pd.DataFrame(lab_values, columns=['L', 'a', 'b'])
+        df['color'] = rgb_hex
+        df['size'] = sizes
+        df['label'] = labels
+        df['percentage'] = percentages
+        
+        # Create 3D scatter plot using actual detected colors
+        fig = go.Figure()
+        fig.add_trace(go.Scatter3d(
+            x=df['L'],
+            y=df['a'],
+            z=df['b'],
+            mode='markers+text',
+            marker=dict(
+                size=df['size'],
+                color=df['color'],  # Use actual detected RGB colors
+                opacity=0.9,
+                line=dict(width=0),
+                symbol='circle',
+            ),
+            text=[f'{p:.1f}%' for p in df['percentage']],
+            hovertext=df['label'],
+            hoverinfo='text',
+            textposition='top center',
+        ))
+        fig.update_layout(
+            scene=dict(
+                xaxis_title='Lightness (L)',
+                yaxis_title='Green-Red (a)',
+                zaxis_title='Blue-Yellow (b)',
+                aspectmode='cube',
+            ),
+            title='Eyebrow Colors in LAB Color Space',
+            height=500,
+            margin=dict(l=0, r=0, t=40, b=0),
+            showlegend=False
+        )
+        # Convert to JSON for Streamlit
+        return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
+        
+    def create_color_pie_chart(self, colors, percentages):
+        """Create a pie chart visualization of the color distribution (legacy matplotlib version)
+        
+        Args:
+            colors: Array of colors in RGB format
+            percentages: Percentage of each color
+            
+        Returns:
+            pie_chart_img: Numpy array containing the pie chart visualization
+        """
+        if colors is None or percentages is None or len(colors) == 0:
+            return None
+            
+        # Create a figure and axis
+        fig, ax = plt.figure(figsize=(5, 5), dpi=100), plt.subplot(111)
+        
+        # Convert RGB colors to hex for matplotlib
+        hex_colors = [f'#{int(r):02x}{int(g):02x}{int(b):02x}' for r, g, b in colors]
+        
+        # Create labels with percentages
+        labels = [f'{p:.1f}%' for p in percentages]
+        
+        # Create the pie chart
+        wedges, texts, autotexts = ax.pie(
+            percentages, 
+            labels=labels,
+            colors=hex_colors,
+            autopct='',  # No percentage inside wedges (we already have it in labels)
+            startangle=90,
+            wedgeprops={'edgecolor': 'w', 'linewidth': 1}
+        )
+        
+        # Customize text appearance
+        plt.setp(texts, size=10, weight='bold')
+        
+        # Equal aspect ratio ensures that pie is drawn as a circle
+        ax.axis('equal')  
+        plt.tight_layout()
+        
+        # Convert matplotlib figure to numpy array
+        fig.canvas.draw()
+        pie_chart_img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        pie_chart_img = pie_chart_img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        
+        # Close the figure to free memory
+        plt.close(fig)
+        
+        return pie_chart_img
     
     def get_color_info(self, colors, percentages):
         """Get color information in RGB, HEX, LAB, LCH, and HSV format"""
@@ -290,10 +476,9 @@ class ColorAnalysis:
         counts = np.bincount(labels)
         percentages = counts / len(labels) * 100
         
-        # Sort colors by darkness (sum of RGB values, lower is darker)
-        # This often gives better results for eyebrow hairs as the darkest colors are usually the actual hairs
-        darkness = np.sum(colors, axis=1)
-        sorted_indices = np.argsort(darkness)
+        # Sort colors by percentage (higher percentage first)
+        # This gives more prominence to the most common colors in the eyebrow
+        sorted_indices = np.argsort(percentages)[::-1]
         colors = colors[sorted_indices]
         percentages = percentages[sorted_indices]
         
