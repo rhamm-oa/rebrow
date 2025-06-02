@@ -371,9 +371,11 @@ if uploaded_file is not None:
                         # Get the visualization image
                         vis_img = facer_result.get('visualization_image')
                         if vis_img is not None:
-                            st.image(vis_img, caption="Facer Segmentation Results", use_container_width=True)
+                            # Convert BGR to RGB for correct display in Streamlit
+                            vis_img_rgb = cv2.cvtColor(vis_img, cv2.COLOR_BGR2RGB)
+                            st.image(vis_img_rgb, caption="Facer Segmentation Results", use_container_width=True)
                         
-                        # Get the eyebrow masks
+                        # Get the eyebrow masks (still useful to store them for other tabs like color analysis)
                         left_eyebrow_mask = facer_result.get('left_eyebrow_mask')
                         right_eyebrow_mask = facer_result.get('right_eyebrow_mask')
                         combined_mask = facer_result.get('combined_eyebrow_mask')
@@ -382,28 +384,14 @@ if uploaded_file is not None:
                         results['facer_left_mask'] = left_eyebrow_mask
                         results['facer_right_mask'] = right_eyebrow_mask
                         
-                        # Display the eyebrow masks
-                        st.subheader("Eyebrow Masks")
-                        mask_col1, mask_col2 = st.columns(2)
+                        # Removed the display of individual eyebrow masks as per user request
                         
-                        with mask_col1:
-                            if left_eyebrow_mask is not None:
-                                st.image(left_eyebrow_mask, caption="Left Eyebrow Mask", use_container_width=True)
-                            else:
-                                st.info("Left eyebrow mask not available")
-                        
-                        with mask_col2:
-                            if right_eyebrow_mask is not None:
-                                st.image(right_eyebrow_mask, caption="Right Eyebrow Mask", use_container_width=True)
-                            else:
-                                st.info("Right eyebrow mask not available")
-                        
-                        # Display the extracted eyebrow area
-                        st.subheader("Extracted Eyebrows")
-                        if combined_mask is not None:
-                            # Extract the eyebrow area
-                            eyebrow_area = facer_segmenter.extract_eyebrow_area(cropped_face, combined_mask)
-                            st.image(eyebrow_area, caption="Extracted Eyebrow Area", use_container_width=True)
+                        # # Display the extracted eyebrow area
+                        # st.subheader("Extracted Eyebrows")
+                        # if combined_mask is not None:
+                        #     # Extract the eyebrow area
+                        #     eyebrow_area = facer_segmenter.extract_eyebrow_area(cropped_face, combined_mask)
+                        #     st.image(eyebrow_area, caption="Extracted Eyebrow Area", use_container_width=True)
                         
                         # --- Color Analysis Section ---
                         st.subheader("Eyebrow Color Analysis")
