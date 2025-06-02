@@ -6,6 +6,7 @@ import argparse
 from tqdm import tqdm
 import sys
 import gc
+import random
 
 # Import custom modules
 from face_detection import FaceDetector
@@ -139,7 +140,12 @@ def main():
     parser.add_argument('--input_dir', type=str, required=True, help='Directory containing input images')
     parser.add_argument('--output_csv', type=str, required=True, help='Output CSV file path')
     parser.add_argument('--use_gpu', action='store_true', help='Use GPU for processing if available')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
     args = parser.parse_args()
+    
+    # Set random seeds for reproducibility
+    random.seed(args.seed)
+    np.random.seed(args.seed)
     
     # Check if input directory exists
     if not os.path.exists(args.input_dir):

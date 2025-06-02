@@ -4,10 +4,13 @@ import numpy as np
 import os
 from PIL import Image
 import io
-import streamlit as st
 import json
 import plotly.graph_objects as go
+import random
 
+# Set random seeds for reproducibility
+random.seed(42)
+np.random.seed(42)
 # Import custom modules
 from face_detection import FaceDetector
 from eyebrow_segmentation import EyebrowSegmentation

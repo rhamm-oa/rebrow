@@ -189,14 +189,14 @@ class ColorAnalysis:
             lab_color = convert_color(rgb_color, LabColor)
             
             lab_values.append([
-                lab_color.lab_l,  # L - Lightness
-                lab_color.lab_a,  # a - green to red
-                lab_color.lab_b   # b - blue to yellow
+                lab_color.lab_l,  # L - Lightness # type: ignore
+                lab_color.lab_a,  # a - green to red # type: ignore
+                lab_color.lab_b   # b - blue to yellow # type: ignore
             ])
             
             # Size based on percentage (scaled for visibility)
             sizes.append(percentage * 5)
-            labels.append(f'Color {i+1}: {percentage:.1f}%<br>RGB: ({r},{g},{b})<br>LAB: ({lab_color.lab_l:.1f}, {lab_color.lab_a:.1f}, {lab_color.lab_b:.1f})')
+            labels.append(f'Color {i+1}: {percentage:.1f}%<br>RGB: ({r},{g},{b})<br>LAB: ({lab_color.lab_l:.1f}, {lab_color.lab_a:.1f}, {lab_color.lab_b:.1f})') # type: ignore
         
         # Create a DataFrame for Plotly
         df = pd.DataFrame(lab_values, columns=['L', 'a', 'b'])
@@ -280,7 +280,7 @@ class ColorAnalysis:
         
         # Convert matplotlib figure to numpy array
         fig.canvas.draw()
-        pie_chart_img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        pie_chart_img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8) # type: ignore
         pie_chart_img = pie_chart_img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
         
         # Close the figure to free memory
@@ -521,11 +521,11 @@ class ColorAnalysis:
         mean = cv2.filter2D(gray.astype(np.float32), -1, kernel)
         sqr_mean = cv2.filter2D((gray.astype(np.float32))**2, -1, kernel)
         # Ensure we don't have negative values before sqrt (can happen due to floating point precision)
-        variance = np.maximum(0, sqr_mean - mean**2)  # Clamp to zero
+        variance = np.maximum(0, sqr_mean - mean**2)  # type: ignore # Clamp to zero
         std_dev = np.sqrt(variance)
         
         # Normalize std_dev for visualization
-        std_dev_norm = cv2.normalize(std_dev, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        std_dev_norm = cv2.normalize(std_dev, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8) # type: ignore
         debug_images['texture_map'] = cv2.applyColorMap(std_dev_norm, cv2.COLORMAP_JET)
         
         # Hair has higher texture than skin - use adaptive threshold based on percentile
