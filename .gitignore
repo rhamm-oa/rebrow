@@ -6,3 +6,4 @@ bisenet_results/
 face-parsing
 face-parsing/assets/ 
 debug_images/
+*.csv
