@@ -49,7 +49,7 @@ eyebrow_stats = EyebrowStatistics()
 
 # Load statistics data
 try:
-    eyebrow_stats.load_data('rebrow_labs.csv')
+    eyebrow_stats.load_data('data/rebrow_labs.csv')
 except Exception as e:
     st.sidebar.error(f"Error loading statistics data: {e}")
 
