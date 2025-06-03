@@ -534,7 +534,11 @@ class FacerSegmentation:
         
         return vis_img
     
-    def segment_eyebrows(self, image: np.ndarray, visualize: bool = True, skip_detection: bool = True) -> Dict[str, Any]:
+    def segment_eyebrows(
+            self, 
+            image: np.ndarray, 
+            visualize: bool = True, 
+            skip_detection: bool = True) -> Dict[str, Any]:
         """
         Segment eyebrows from a cropped face image using Facer.
 
