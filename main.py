@@ -6,11 +6,13 @@ from PIL import Image
 import io
 import json
 import plotly.graph_objects as go
+import plotly.express as px
 import random
 
 # Set random seeds for reproducibility
 random.seed(42)
 np.random.seed(42)
+
 # Import custom modules
 from face_detection import FaceDetector
 from eyebrow_segmentation import EyebrowSegmentation
@@ -18,6 +20,7 @@ from color_analysis import ColorAnalysis
 from shape_analysis import ShapeAnalysis
 from facer_segmentation import FacerSegmentation
 from eyebrow_recoloring import EyebrowRecoloring
+from eyebrow_statistics import EyebrowStatistics
 
 # Set page config
 st.set_page_config(
@@ -42,6 +45,13 @@ color_analyzer = ColorAnalysis()
 shape_analyzer = ShapeAnalysis()
 facer_segmenter = FacerSegmentation()
 eyebrow_recoloring = EyebrowRecoloring()
+eyebrow_stats = EyebrowStatistics()
+
+# Load statistics data
+try:
+    eyebrow_stats.load_data('rebrow_labs.csv')
+except Exception as e:
+    st.sidebar.error(f"Error loading statistics data: {e}")
 
 # Function to convert OpenCV image to PIL Image
 def cv2_to_pil(cv2_img):
@@ -59,7 +69,7 @@ def cv2_to_pil(cv2_img):
 def pil_to_cv2(pil_img):
     if pil_img is None:
         return None
-    return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    return cv2.cvtColor(np.array(pil_img, dtype=np.uint8), cv2.COLOR_RGB2BGR)
 
 # Function to process the uploaded image
 def process_image(image):
@@ -257,7 +267,7 @@ if uploaded_file is not None:
     
     if results:
         # Create tabs for different analyses
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Shape Analysis", "Facer Segmentation + Color analysis", "Virtual Try-On", "Detailed View"])
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Overview", "Shape Analysis", "Facer Segmentation+Color Analysis", "Virtual Try-On", "Detailed View", "Statistics"])
         
         
         with tab1:
@@ -389,12 +399,16 @@ if uploaded_file is not None:
                         
                         # Removed the display of individual eyebrow masks as per user request
                         
-                        # # Display the extracted eyebrow area
-                        # st.subheader("Extracted Eyebrows")
-                        # if combined_mask is not None:
-                        #     # Extract the eyebrow area
-                        #     eyebrow_area = facer_segmenter.extract_eyebrow_area(cropped_face, combined_mask)
-                        #     st.image(eyebrow_area, caption="Extracted Eyebrow Area", use_container_width=True)
+                        # Display the extracted eyebrow area
+                        st.subheader("Extracted Eyebrows")
+                        if combined_mask is not None:
+                            # Extract the eyebrow area
+                            eyebrow_area = facer_segmenter.extract_eyebrow_area(cropped_face, combined_mask)
+                            if eyebrow_area is not None:
+                                eyebrow_area_rgb = cv2.cvtColor(eyebrow_area, cv2.COLOR_BGR2RGB)
+                                st.image(eyebrow_area_rgb, caption="Extracted Eyebrow Area", use_container_width=True)
+                            else:
+                                st.info("Could not extract eyebrow area.")
                         
                         # --- Color Analysis Section ---
                         st.subheader("Eyebrow Color Analysis")
@@ -593,9 +607,8 @@ if uploaded_file is not None:
                 
                 if cropped_face is not None and left_eyebrow_mask is not None and right_eyebrow_mask is not None:
                     # Display original image
-                    # st.subheader("Original Image")
-                    # original_face_rgb = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
-                    # st.image(original_face_rgb, caption="Original Face", use_container_width=True)
+                    original_face_rgb = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
+
                     
                     # Pre-defined color palette
                     color_palette = eyebrow_recoloring.create_color_palette(n_colors=6)
@@ -829,6 +842,118 @@ if uploaded_file is not None:
 
 
 
+
+        # Statistics Tab
+        with tab6:
+            st.header("Eyebrow Color Statistics")
+            st.write("Analysis of eyebrow colors across the dataset")
+            
+            # Create tabs within the Statistics tab
+            stat_tab1, stat_tab2, stat_tab4 = st.tabs(["Color Swatches", "3D Scatter", "Summary Stats"])
+            
+            # Color Swatches tab
+            with stat_tab1:
+                st.subheader("Dominant Eyebrow Colors")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("Left Eyebrow - Dominant Colors")
+                    left_swatches = eyebrow_stats.create_dominant_color_swatches('left')
+                    if left_swatches:
+                        st.image(left_swatches, use_column_width=True)
+                        
+                with col2:
+                    st.write("Right Eyebrow - Dominant Colors")
+                    right_swatches = eyebrow_stats.create_dominant_color_swatches('right')
+                    if right_swatches:
+                        st.image(right_swatches, use_column_width=True)
+                
+                st.subheader("All Colors Distribution")
+                color_dist_fig = eyebrow_stats.create_color_distribution_plot()
+                if color_dist_fig:
+                    st.plotly_chart(color_dist_fig, use_container_width=True)
+            
+            # 3D Scatter tab
+            with stat_tab2:
+                st.subheader("3D LAB Color Space Visualization")
+                col1, col2 = st.columns(2)
+                
+                # Left eyebrow plots
+                with col1:
+                    st.write("Left Eyebrow")
+                    for i in range(1, 4):
+                        fig = eyebrow_stats.create_3d_color_scatter('left', i)
+                        if fig:
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    hist_fig = eyebrow_stats.create_percentage_histogram('left')
+                    if hist_fig:
+                        st.plotly_chart(hist_fig, use_container_width=True)
+                
+                # Right eyebrow plots
+                with col2:
+                    st.write("Right Eyebrow")
+                    for i in range(1, 4):
+                        fig = eyebrow_stats.create_3d_color_scatter('right', i)
+                        if fig:
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    hist_fig = eyebrow_stats.create_percentage_histogram('right')
+                    if hist_fig:
+                        st.plotly_chart(hist_fig, use_container_width=True)
+            
+            # Icicle Plot tab
+            # with stat_tab3:
+            #     st.subheader("Individual Eyebrow Color Visualization")
+            #     try:
+            #         sunburst_fig = eyebrow_stats.create_icicle_plot()
+            #         if sunburst_fig:
+            #             st.plotly_chart(sunburst_fig, use_container_width=True)
+            #             st.write("""
+            #             This sunburst chart shows the eyebrow colors for individual images in the dataset:
+            #             - The center represents all eyebrows
+            #             - The first ring shows individual images (sample of up to 10)
+            #             - The second ring divides each image into left and right eyebrows
+            #             - The outer ring shows the three dominant colors for each eyebrow
+                        
+            #             Each color segment is colored with the actual eyebrow color, and its size represents the percentage of that color in the eyebrow.
+            #             """)
+            #         else:
+            #             st.error("Sunburst chart could not be created - no data available")
+            #     except Exception as e:
+            #         st.error(f"Error creating sunburst chart: {str(e)}")
+            #         import traceback
+            #         st.code(traceback.format_exc())
+            
+            # Summary Statistics tab
+            with stat_tab4:
+                st.subheader("Summary Statistics")
+                stats_df = eyebrow_stats.get_summary_statistics()
+                if stats_df is not None:
+                    # Display color swatches in the dataframe
+                    st.write("Average LAB values and percentages for each dominant color")
+                    
+                    # Display the dataframe with hex colors
+                    st.dataframe(stats_df, use_container_width=True)
+                    
+                    # Create a visual representation of the colors
+                    st.subheader("Color Swatches")
+                    for i, row in stats_df.iterrows():
+                        st.markdown(f"**{row['Side']} Eyebrow - Color {row['Color']}**")
+                        st.markdown(f"<div style='background-color: {row['Hex Color']}; width: 100px; height: 50px; border: 1px solid #000;'></div>", unsafe_allow_html=True)
+                        st.write(f"L: {row['Avg L']:.2f}, a: {row['Avg a']:.2f}, b: {row['Avg b']:.2f}, %: {row['Avg %']:.2f}")
+                        st.write("---")
+                    
+                    # Create a bar chart of percentages
+                    st.write("Average color percentages")
+                    fig = px.bar(stats_df, 
+                                x='Color', 
+                                y='Avg %', 
+                                color='Side', 
+                                barmode='group',
+                                title="Average Color Percentages by Side and Dominance",
+                                labels={'Avg %': 'Average Percentage', 'Color': 'Dominant Color Number'})
+                    st.plotly_chart(fig, use_container_width=True)
 
 # Add information about the app
 st.sidebar.title("About")
