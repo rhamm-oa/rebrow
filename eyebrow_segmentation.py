@@ -146,8 +146,8 @@ class EyebrowSegmentation:
         unknown = cv2.dilate(mask, kernel, iterations=2)
         
         # Set values in trimap
-        trimap[fg > 0] = 255
-        trimap[unknown > 0] = 128
+        trimap[fg > 0] = 255 # type: ignore
+        trimap[unknown > 0] = 128 # type: ignore
         
         # Since we don't have a true alpha matting algorithm in OpenCV,
         # we'll simulate it using the mask and edge detection
