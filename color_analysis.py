@@ -99,7 +99,7 @@ class ColorAnalysis:
         sqr_mean_img = cv2.filter2D(gray_float * gray_float, -1, kernel)
         
         # Calculate variance with proper type handling
-        variance = np.maximum(0.0, sqr_mean_img - mean_img * mean_img)
+        variance = np.maximum(0.0, sqr_mean_img - mean_img * mean_img) # type: ignore
         
         # Normalize variance with proper destination array
         variance_norm = np.zeros_like(variance, dtype=np.uint8)
@@ -164,7 +164,7 @@ class ColorAnalysis:
         debug_images['12_detected_hair_pixels'] = cv2.cvtColor(hair_pixels_img, cv2.COLOR_BGR2RGB)
         
         # If we don't have enough pixels, try a more aggressive approach
-        final_mask_sum = int(np.sum(final_mask))  # Convert to int for comparison
+        final_mask_sum = int(np.sum(final_mask))  # type: ignore # Convert to int for comparison
         if final_mask_sum < 50:
             # Fall back to more aggressive LAB threshold
             fallback_threshold = np.percentile(l_channel[mask > 0], 20) if np.sum(mask) > 0 else 100
@@ -178,7 +178,7 @@ class ColorAnalysis:
             debug_images['13_fallback_mask'] = cv2.cvtColor(fallback_mask, cv2.COLOR_GRAY2RGB)
             debug_images['13_fallback_note'] = f"Used more aggressive LAB threshold: 20th percentile (threshold: {fallback_threshold})"
             
-            fallback_mask_sum = int(np.sum(fallback_mask))  # Convert to int for comparison
+            fallback_mask_sum = int(np.sum(fallback_mask))  # type: ignore # Convert to int for comparison
             if fallback_mask_sum > final_mask_sum:
                 final_mask = fallback_mask
                 hair_pixels_img = cv2.bitwise_and(image, image, mask=final_mask)
