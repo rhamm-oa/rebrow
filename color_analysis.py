@@ -9,20 +9,6 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import pandas as pd
 import json
-from colormath.color_objects import sRGBColor, LabColor
-from colormath.color_conversions import convert_color
-
-# Import OpenCV's extra modules
-try:
-    # Try to import ximgproc module
-    from cv2 import ximgproc
-except ImportError:
-    # If not available, create a placeholder that will raise a more helpful error
-    class XimgprocPlaceholder:
-        def __getattr__(self, name):
-            raise ImportError("OpenCV's ximgproc module is not available. "
-                             "Install opencv-contrib-python package to use this feature.")
-    ximgproc = XimgprocPlaceholder()
 from colormath.color_objects import sRGBColor, LabColor, LCHabColor, HSVColor
 from colormath.color_conversions import convert_color
 
@@ -30,96 +16,284 @@ class ColorAnalysis:
     def __init__(self):
         pass
     
-    def extract_dominant_colors(self, image, mask, n_colors=3, exclude_skin=True):
-        """Extract dominant colors from the masked region using KMeans clustering
+    def extract_eyebrow_hair_pixels_only(self, image, mask, debug=True):
+        """
+        Advanced method to extract ONLY eyebrow hair pixels, excluding skin tones.
+        Uses multiple techniques including HSV thresholding, edge detection, and texture analysis.
         
         Args:
             image: Input image (BGR format)
-            mask: Binary mask for the region of interest
+            mask: Binary mask for the eyebrow region from Facer segmentation
+            debug: Whether to return debug images
+            
+        Returns:
+            hair_mask: Binary mask containing only hair pixels (LAB-based final result)
+            debug_images: Dictionary of debug images showing the process
+        """
+        debug_images = {}
+        
+        if mask is None or np.sum(mask) == 0:
+            return None, debug_images
+        
+        # Apply the eyebrow mask to the image
+        masked_image = cv2.bitwise_and(image, image, mask=mask)
+        debug_images['1_masked_original'] = cv2.cvtColor(masked_image.copy(), cv2.COLOR_BGR2RGB)
+        
+        # Convert to different color spaces
+        gray = cv2.cvtColor(masked_image, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(masked_image, cv2.COLOR_BGR2HSV)
+        lab = cv2.cvtColor(masked_image, cv2.COLOR_BGR2LAB)
+        
+        debug_images['2_gray'] = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+        
+        # --- METHOD 1: HSV-based hair detection ---
+        h, s, v = cv2.split(hsv)
+        
+        # Create hair mask based on low brightness (Value channel)
+        # Hair is typically much darker than skin
+        hair_value_mask = np.zeros_like(mask)
+        # Use adaptive threshold based on the image content
+        masked_v = v[mask > 0]
+        if len(masked_v) > 0:
+            # Use percentile-based threshold for better adaptation
+            value_threshold = np.percentile(masked_v, 30)  # Take darker 70% of pixels
+            value_threshold = min(value_threshold, 80)  # Cap at 80 for very light images
+        else:
+            value_threshold = 100
+            
+        hair_value_mask[(v < value_threshold) & (mask > 0)] = 255
+        debug_images['3_hsv_value_mask'] = cv2.cvtColor(hair_value_mask, cv2.COLOR_GRAY2RGB)
+        
+        # Additional saturation filtering - hair often has different saturation than skin
+        hair_sat_mask = np.zeros_like(mask)
+        # Hair can have lower saturation (more neutral) or higher saturation (more colorful)
+        # We'll be more permissive here and focus on value
+        hair_sat_mask[(s > 10) & (mask > 0)] = 255  # Remove very desaturated pixels (likely skin)
+        debug_images['4_hsv_saturation_mask'] = cv2.cvtColor(hair_sat_mask, cv2.COLOR_GRAY2RGB)
+        
+        # Combine HSV masks
+        hsv_hair_mask = cv2.bitwise_and(hair_value_mask, hair_sat_mask)
+        debug_images['5_combined_hsv_mask'] = cv2.cvtColor(hsv_hair_mask, cv2.COLOR_GRAY2RGB)
+        
+        # --- METHOD 2: Edge detection for hair strands ---
+        # Apply bilateral filter first to reduce noise while preserving edges
+        bilateral = cv2.bilateralFilter(gray, 9, 75, 75)
+        
+        # Use Canny edge detection to find hair boundaries
+        edges = cv2.Canny(bilateral, 30, 100)
+        edges = cv2.bitwise_and(edges, edges, mask=mask)
+        
+        # Dilate edges to make them thicker (connect broken hair strands)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        edges_dilated = cv2.dilate(edges, kernel, iterations=1)
+        debug_images['6_edge_detection'] = cv2.cvtColor(edges_dilated, cv2.COLOR_GRAY2RGB)
+        
+        # --- METHOD 3: Texture-based detection ---
+        # Calculate local variance to detect textured regions (hair vs smooth skin)
+        kernel_size = 5
+        kernel = np.ones((kernel_size, kernel_size), np.float32) / (kernel_size * kernel_size)
+        
+        # Convert to float32 for proper computation
+        gray_float = gray.astype(np.float32)
+        mean_img = cv2.filter2D(gray_float, -1, kernel)
+        sqr_mean_img = cv2.filter2D(gray_float * gray_float, -1, kernel)
+        
+        # Calculate variance with proper type handling
+        variance = np.maximum(0.0, sqr_mean_img - mean_img * mean_img)
+        
+        # Normalize variance with proper destination array
+        variance_norm = np.zeros_like(variance, dtype=np.uint8)
+        cv2.normalize(variance, variance_norm, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        
+        # High variance indicates texture (hair), low variance indicates smooth areas (skin)
+        texture_threshold = np.percentile(variance_norm[mask > 0], 70) if np.sum(mask) > 0 else 50
+        texture_mask = np.zeros_like(mask)
+        texture_mask[(variance_norm > texture_threshold) & (mask > 0)] = 255
+        debug_images['7_texture_variance'] = cv2.cvtColor(variance_norm, cv2.COLOR_GRAY2RGB)
+        debug_images['8_texture_mask'] = cv2.cvtColor(texture_mask, cv2.COLOR_GRAY2RGB)
+        
+        # --- METHOD 4: LAB color space analysis ---
+        l_channel, a_channel, b_channel = cv2.split(lab)
+        
+        # In LAB space, hair typically has lower L (lightness) values
+        lab_threshold = np.percentile(l_channel[mask > 0], 30) if np.sum(mask) > 0 else 120
+        lab_hair_mask = np.zeros_like(mask)
+        lab_hair_mask[(l_channel < lab_threshold) & (mask > 0)] = 255
+        debug_images['9_lab_lightness_mask'] = cv2.cvtColor(lab_hair_mask, cv2.COLOR_GRAY2RGB)
+        
+        # --- SHOW COMBINED METHODS FOR DEBUGGING (but don't use) ---
+        # Start with HSV mask as primary
+        combined_mask = hsv_hair_mask.copy()
+        
+        # Add pixels detected by edge detection
+        combined_mask = cv2.bitwise_or(combined_mask, edges_dilated)
+        
+        # Add pixels detected by texture analysis
+        combined_mask = cv2.bitwise_or(combined_mask, texture_mask)
+        
+        # Intersect with LAB mask to ensure we keep dark pixels
+        combined_mask = cv2.bitwise_and(combined_mask, lab_hair_mask)
+        
+        # Ensure we stay within the original eyebrow mask
+        combined_mask = cv2.bitwise_and(combined_mask, mask)
+        
+        debug_images['10_combined_before_morphology'] = cv2.cvtColor(combined_mask, cv2.COLOR_GRAY2RGB)
+        
+        # --- USE ONLY LAB MASK AS FINAL RESULT ---
+        # Instead of using the combined mask, use only the LAB mask
+        final_mask = lab_hair_mask.copy()
+        
+        # Ensure we stay within the original eyebrow mask
+        final_mask = cv2.bitwise_and(final_mask, mask)
+        
+        # --- MORPHOLOGICAL OPERATIONS ---
+        # Clean up the mask with morphological operations
+        kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        
+        # Remove small noise
+        final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel_open)
+        # Fill small gaps
+        final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, kernel_close)
+        
+        debug_images['11_final_hair_mask'] = cv2.cvtColor(final_mask, cv2.COLOR_GRAY2RGB)
+        debug_images['11_note'] = "⚠️ NOTE: Final mask uses ONLY LAB lightness filtering (not combined methods)"
+        
+        # Create final visualization showing detected hair pixels
+        hair_pixels_img = cv2.bitwise_and(image, image, mask=final_mask)
+        debug_images['12_detected_hair_pixels'] = cv2.cvtColor(hair_pixels_img, cv2.COLOR_BGR2RGB)
+        
+        # If we don't have enough pixels, try a more aggressive approach
+        final_mask_sum = int(np.sum(final_mask))  # Convert to int for comparison
+        if final_mask_sum < 50:
+            # Fall back to more aggressive LAB threshold
+            fallback_threshold = np.percentile(l_channel[mask > 0], 20) if np.sum(mask) > 0 else 100
+            fallback_mask = np.zeros_like(mask)
+            fallback_mask[(l_channel < fallback_threshold) & (mask > 0)] = 255
+            
+            # Clean up fallback mask
+            fallback_mask = cv2.morphologyEx(fallback_mask, cv2.MORPH_OPEN, kernel_open)
+            fallback_mask = cv2.morphologyEx(fallback_mask, cv2.MORPH_CLOSE, kernel_close)
+            
+            debug_images['13_fallback_mask'] = cv2.cvtColor(fallback_mask, cv2.COLOR_GRAY2RGB)
+            debug_images['13_fallback_note'] = f"Used more aggressive LAB threshold: 20th percentile (threshold: {fallback_threshold})"
+            
+            fallback_mask_sum = int(np.sum(fallback_mask))  # Convert to int for comparison
+            if fallback_mask_sum > final_mask_sum:
+                final_mask = fallback_mask
+                hair_pixels_img = cv2.bitwise_and(image, image, mask=final_mask)
+                debug_images['12_detected_hair_pixels'] = cv2.cvtColor(hair_pixels_img, cv2.COLOR_BGR2RGB)
+        
+        # Add final statistics
+        lab_threshold_used = lab_threshold if final_mask_sum >= 50 else np.percentile(l_channel[mask > 0], 20)
+        debug_images['14_final_stats'] = f"LAB L-channel threshold used: {lab_threshold_used:.1f}\nPixels detected: {final_mask_sum}\nMethod: LAB lightness filtering only"
+        
+        return final_mask, debug_images
+        
+    def extract_colors_from_hair_mask(self, image, hair_mask, n_colors=3):
+        """
+        Extract dominant colors from the refined hair mask.
+        
+        Args:
+            image: Input image (BGR format)
+            hair_mask: Binary mask containing only hair pixels
             n_colors: Number of dominant colors to extract
-            exclude_skin: Whether to apply additional filtering to exclude skin tones
             
         Returns:
             colors: Array of dominant colors in RGB format
-            percentages: Percentage of each color in the mask
+            percentages: Percentage of each color
         """
-        if mask is None or np.sum(mask) == 0:
+        if hair_mask is None or np.sum(hair_mask) == 0:
             return None, None
         
-        # Apply mask to image
-        masked_image = cv2.bitwise_and(image, image, mask=mask)
+        # Get hair pixels
+        hair_pixels = image[hair_mask > 0]
         
-        # Simple approach: just use the masked pixels directly
-        # Get all non-zero pixels (where the mask is applied)
-        non_zero_pixels = masked_image[np.where(mask > 0)]
-        
-        # If we don't have enough pixels, return None
-        if len(non_zero_pixels) == 0:
+        if len(hair_pixels) < n_colors * 5:  # Need minimum pixels for clustering
             return None, None
-            
-        # Reshape the image to be a list of pixels
-        pixels = non_zero_pixels.reshape(-1, 3)
         
         # Convert from BGR to RGB
-        pixels = pixels[:, ::-1]
+        hair_pixels_rgb = hair_pixels[:, ::-1]
         
-        # Check if we have enough pixels
-        if len(pixels) < n_colors:
-            return None, None
+        # Apply K-means clustering
+        kmeans = KMeans(n_clusters=8, random_state=42, n_init=10,algorithm='lloyd',max_iter=3000)
+        kmeans.fit(hair_pixels_rgb)
         
-        # Apply KMeans clustering with explicit n_init to avoid warning
-        kmeans = KMeans(n_clusters=n_colors, random_state=42, n_init=10)
-        kmeans.fit(pixels)
-        
-        # Get the colors
+        # Get colors and percentages
         colors = kmeans.cluster_centers_.astype(int)
-        
-        # Get the percentage of each color
         labels = kmeans.labels_
         counts = np.bincount(labels)
         percentages = counts / len(labels) * 100
         
-        # Sort colors by percentage
+        # Sort by percentage (most dominant first)
         sorted_indices = np.argsort(percentages)[::-1]
         colors = colors[sorted_indices]
         percentages = percentages[sorted_indices]
         
         return colors, percentages
     
+    def extract_reliable_hair_colors(self, image, mask, n_colors=3):
+        """
+        Enhanced method to extract reliable eyebrow hair colors using multiple techniques.
+        This method focuses exclusively on hair pixels, excluding skin tones.
+        
+        Args:
+            image: Input image (BGR format)
+            mask: Binary mask for the eyebrow region (from Facer segmentation)
+            n_colors: Number of dominant colors to extract
+            
+        Returns:
+            colors: Array of dominant colors in RGB format
+            percentages: Percentage of each color
+            debug_images: Dictionary of debug images showing the process
+        """
+        # Extract hair pixels only
+        hair_mask, debug_images = self.extract_eyebrow_hair_pixels_only(image, mask, debug=True)
+        
+        if hair_mask is None:
+            return None, None, debug_images
+        
+        # Extract colors from hair pixels
+        colors, percentages = self.extract_colors_from_hair_mask(image, hair_mask, n_colors)
+        
+        if colors is None:
+            return None, None, debug_images
+        
+        # Add color extraction info to debug images
+        if len(colors) > 0:
+            # Create a color palette visualization
+            palette_height = 100
+            palette_width = 400
+            palette = np.zeros((palette_height, palette_width, 3), dtype=np.uint8)
+            
+            start_x = 0
+            for i, (color, percentage) in enumerate(zip(colors, percentages)): # type: ignore
+                width = int(palette_width * (percentage / 100))
+                end_x = min(start_x + width, palette_width)
+                if end_x > start_x:
+                    palette[:, start_x:end_x] = color
+                start_x = end_x
+            
+            debug_images['13_extracted_color_palette'] = palette
+        
+        return colors, percentages, debug_images
+    
+    
     def create_color_palette(self, colors, percentages):
-        """Create a color palette image showing the dominant colors"""
         if colors is None or percentages is None:
             return None
-        
-        # Create a 100x300 image to display the colors
         palette = np.zeros((100, 300, 3), dtype=np.uint8)
-        
-        # Calculate the width of each color based on its percentage
         start_x = 0
         for i, (color, percentage) in enumerate(zip(colors, percentages)):
             width = int(300 * (percentage / 100))
             end_x = start_x + width
-            
-            # Draw the color
             palette[:, start_x:end_x] = color
-            
             start_x = end_x
-        
-        # Convert to RGB for displaying
-        palette = cv2.cvtColor(palette, cv2.COLOR_RGB2BGR)
-        
+        # DO NOT convert to BGR, keep as RGB for Streamlit
         return palette
         
     def create_plotly_pie_chart(self, colors, percentages):
-        """Create an interactive Plotly pie chart visualization of the color distribution
-        
-        Args:
-            colors: Array of colors in RGB format
-            percentages: Percentage of each color
-            
-        Returns:
-            fig_json: JSON representation of the Plotly figure for Streamlit
-        """
+        """Create an interactive Plotly pie chart visualization of the color distribution"""
         if colors is None or percentages is None or len(colors) == 0:
             return None
             
@@ -144,7 +318,7 @@ class ColorAnalysis:
         # Update layout for better appearance
         fig.update_layout(
             title={
-                'text': 'Eyebrow Color Distribution',
+                'text': 'Eyebrow Hair Color Distribution',
                 'y': 0.95,
                 'x': 0.5,
                 'xanchor': 'center',
@@ -162,15 +336,7 @@ class ColorAnalysis:
         return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
     
     def create_plotly_lab_3d(self, colors, percentages):
-        """Create an interactive 3D visualization of colors in LAB color space
-        
-        Args:
-            colors: Array of colors in RGB format
-            percentages: Percentage of each color
-            
-        Returns:
-            fig_json: JSON representation of the Plotly figure for Streamlit
-        """
+        """Create an interactive 3D visualization of colors in LAB color space"""
         if colors is None or percentages is None or len(colors) == 0:
             return None
             
@@ -231,62 +397,14 @@ class ColorAnalysis:
                 zaxis_title='Blue-Yellow (b)',
                 aspectmode='cube',
             ),
-            title='Eyebrow Colors in LAB Color Space',
+            title='Eyebrow Hair Colors in LAB Color Space',
             height=500,
             margin=dict(l=0, r=0, t=40, b=0),
             showlegend=False
         )
+        
         # Convert to JSON for Streamlit
         return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
-        
-    def create_color_pie_chart(self, colors, percentages):
-        """Create a pie chart visualization of the color distribution (legacy matplotlib version)
-        
-        Args:
-            colors: Array of colors in RGB format
-            percentages: Percentage of each color
-            
-        Returns:
-            pie_chart_img: Numpy array containing the pie chart visualization
-        """
-        if colors is None or percentages is None or len(colors) == 0:
-            return None
-            
-        # Create a figure and axis
-        fig, ax = plt.figure(figsize=(5, 5), dpi=100), plt.subplot(111)
-        
-        # Convert RGB colors to hex for matplotlib
-        hex_colors = [f'#{int(r):02x}{int(g):02x}{int(b):02x}' for r, g, b in colors]
-        
-        # Create labels with percentages
-        labels = [f'{p:.1f}%' for p in percentages]
-        
-        # Create the pie chart
-        wedges, texts, autotexts = ax.pie(
-            percentages, 
-            labels=labels,
-            colors=hex_colors,
-            autopct='',  # No percentage inside wedges (we already have it in labels)
-            startangle=90,
-            wedgeprops={'edgecolor': 'w', 'linewidth': 1}
-        )
-        
-        # Customize text appearance
-        plt.setp(texts, size=10, weight='bold')
-        
-        # Equal aspect ratio ensures that pie is drawn as a circle
-        ax.axis('equal')  
-        plt.tight_layout()
-        
-        # Convert matplotlib figure to numpy array
-        fig.canvas.draw()
-        pie_chart_img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8) # type: ignore
-        pie_chart_img = pie_chart_img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-        
-        # Close the figure to free memory
-        plt.close(fig)
-        
-        return pie_chart_img
     
     def get_color_info(self, colors, percentages):
         """Get color information in RGB, HEX, LAB, LCH, and HSV format"""
@@ -317,738 +435,6 @@ class ColorAnalysis:
         
         return color_info
     
-    def extract_eyebrow_hair_colors(self, image, mask, n_colors=3, darkness_threshold=100):
-        """Extract dominant colors of eyebrow hairs by focusing on darker pixels in the masked region
-        
-        Args:
-            image: Input image (BGR format)
-            mask: Binary mask for the region of interest
-            n_colors: Number of dominant colors to extract
-            darkness_threshold: Maximum brightness value to consider as hair (0-255)
-                               Lower values = darker pixels only
-            
-        Returns:
-            colors: Array of dominant colors in RGB format
-            percentages: Percentage of each color in the mask
-        """
-        if mask is None or np.sum(mask) == 0:
-            return None, None
-        
-        # Apply mask to image
-        masked_image = cv2.bitwise_and(image, image, mask=mask)
-        
-        # Convert to grayscale to get brightness
-        gray = cv2.cvtColor(masked_image, cv2.COLOR_BGR2GRAY)
-        
-        # Create a mask of darker pixels (likely to be hair rather than skin)
-        dark_mask = np.zeros_like(mask)
-        dark_mask[(gray < darkness_threshold) & (mask > 0)] = 255
-        
-        # If we don't have enough dark pixels, gradually increase the threshold
-        while np.sum(dark_mask) < 100 and darkness_threshold < 180:
-            darkness_threshold += 15
-            dark_mask = np.zeros_like(mask)
-            dark_mask[(gray < darkness_threshold) & (mask > 0)] = 255
-        
-        # Apply the dark mask to the original image
-        dark_pixels = cv2.bitwise_and(image, image, mask=dark_mask)
-        
-        # Get all non-zero pixels (where the dark mask is applied)
-        non_zero_pixels = dark_pixels[np.where(dark_mask > 0)]
-        
-        # If we don't have enough pixels, return None
-        if len(non_zero_pixels) < n_colors * 5:  # Need at least a few pixels per cluster
-            return None, None
-            
-        # Reshape the image to be a list of pixels
-        pixels = non_zero_pixels.reshape(-1, 3)
-        
-        # Convert from BGR to RGB
-        pixels = pixels[:, ::-1]
-        
-        # Apply KMeans clustering with explicit n_init to avoid warning
-        kmeans = KMeans(n_clusters=n_colors, random_state=42, n_init=10)
-        kmeans.fit(pixels)
-        
-        # Get the colors
-        colors = kmeans.cluster_centers_.astype(int)
-        
-        # Get the percentage of each color
-        labels = kmeans.labels_
-        counts = np.bincount(labels)
-        percentages = counts / len(labels) * 100
-        
-        # Sort colors by percentage
-        sorted_indices = np.argsort(percentages)[::-1]
-        colors = colors[sorted_indices]
-        percentages = percentages[sorted_indices]
-        
-        return colors, percentages
-        
-    def extract_reliable_hair_colors(self, image, mask, n_colors=3):
-        """
-        A reliable method to extract multiple eyebrow hair colors using Otsu's thresholding
-        and K-means clustering. This method is designed to consistently return multiple colors.
-        
-        Args:
-            image: Input image (BGR format)
-            mask: Binary mask for the region of interest
-            n_colors: Number of dominant colors to extract
-            
-        Returns:
-            colors: Array of dominant colors in RGB format
-            percentages: Percentage of each color in the mask
-            debug_images: Dictionary of debug images showing the processing steps
-        """
-        if mask is None or np.sum(mask) == 0:
-            return None, None, None
-            
-        # Create debug images dictionary
-        debug_images = {}
-        
-        # Apply mask to image
-        masked_image = cv2.bitwise_and(image, image, mask=mask)
-        debug_images['original_masked'] = cv2.cvtColor(masked_image.copy(), cv2.COLOR_BGR2RGB)
-        
-        # Convert to grayscale
-        gray = cv2.cvtColor(masked_image, cv2.COLOR_BGR2GRAY)
-
-        # Apply bilateral filter to smooth while preserving edges, potentially improving Otsu
-        gray_blurred = cv2.bilateralFilter(gray, d=9, sigmaColor=75, sigmaSpace=75)
-        
-        # Use Otsu's thresholding to automatically find threshold for dark pixels
-        # This is more adaptive than a fixed threshold
-        _, otsu_mask = cv2.threshold(gray_blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        otsu_mask = cv2.bitwise_and(otsu_mask, mask)
-        debug_images['otsu_mask'] = cv2.cvtColor(otsu_mask, cv2.COLOR_GRAY2BGR)
-        
-        # Clean up with morphological operations
-        kernel = np.ones((2,2), np.uint8)
-        refined_mask = cv2.morphologyEx(otsu_mask, cv2.MORPH_OPEN, kernel)
-        refined_mask = cv2.morphologyEx(refined_mask, cv2.MORPH_CLOSE, kernel)
-        debug_images['refined_mask'] = cv2.cvtColor(refined_mask, cv2.COLOR_GRAY2BGR)
-        
-        # Extract hair pixels using the refined mask
-        hair_pixels_img = cv2.bitwise_and(image, image, mask=refined_mask)
-        debug_images['hair_pixels'] = cv2.cvtColor(hair_pixels_img.copy(), cv2.COLOR_BGR2RGB)
-        
-        # Get coordinates of non-zero pixels
-        y_coords, x_coords = np.nonzero(refined_mask)
-        
-        # If we don't have enough pixels, try a less aggressive approach
-        if len(y_coords) < n_colors * 10:
-            # Try a fixed threshold instead
-            dark_mask = np.zeros_like(mask)
-            dark_condition = np.less(gray, 130)  # Less aggressive threshold
-            mask_condition = np.greater(mask, 0)
-            dark_pixels = np.logical_and(dark_condition, mask_condition)
-            dark_mask[dark_pixels] = 255
-            
-            # Clean up
-            dark_mask = cv2.morphologyEx(dark_mask, cv2.MORPH_OPEN, kernel)
-            dark_mask = cv2.morphologyEx(dark_mask, cv2.MORPH_CLOSE, kernel)
-            debug_images['fallback_mask'] = cv2.cvtColor(dark_mask, cv2.COLOR_GRAY2BGR)
-            
-            # Extract hair pixels
-            hair_pixels_img = cv2.bitwise_and(image, image, mask=dark_mask)
-            debug_images['fallback_pixels'] = cv2.cvtColor(hair_pixels_img.copy(), cv2.COLOR_BGR2RGB)
-            
-            # Get new coordinates
-            y_coords, x_coords = np.nonzero(dark_mask)
-            
-            # If still not enough pixels, use the whole masked region
-            if len(y_coords) < n_colors * 10:
-                debug_images['using_whole_mask'] = cv2.cvtColor(masked_image.copy(), cv2.COLOR_BGR2RGB)
-                y_coords, x_coords = np.nonzero(mask)
-        
-        # Extract BGR values at the non-zero coordinates
-        hair_pixels = image[y_coords, x_coords]
-        
-        # Convert from BGR to RGB for display and clustering
-        hair_pixels_rgb = hair_pixels[:, ::-1]
-        
-        # Apply KMeans clustering with forced n_colors
-        kmeans = KMeans(n_clusters=n_colors, random_state=42, n_init=10)
-        kmeans.fit(hair_pixels_rgb)
-        
-        # Get the colors
-        colors = kmeans.cluster_centers_.astype(int)
-        
-        # Get the percentage of each color
-        labels = kmeans.labels_
-        counts = np.bincount(labels)
-        percentages = counts / len(labels) * 100
-        
-        # Sort colors by percentage (higher percentage first)
-        # This gives more prominence to the most common colors in the eyebrow
-        sorted_indices = np.argsort(percentages)[::-1]
-        colors = colors[sorted_indices]
-        percentages = percentages[sorted_indices]
-        
-        return colors, percentages, debug_images
-        
-    def extract_texture_based_hairs(self, image, mask, n_colors=3):
-        """
-        Extract eyebrow hairs using texture-based analysis and DBSCAN clustering.
-        This method focuses on the textural differences between hair and skin.
-        
-        Args:
-            image: Input image (BGR format)
-            mask: Binary mask for the region of interest
-            n_colors: Number of dominant colors to extract
-            
-        Returns:
-            colors: Array of dominant colors in RGB format
-            percentages: Percentage of each color in the mask
-            debug_images: Dictionary of debug images showing the processing steps
-        """
-        if mask is None or np.sum(mask) == 0:
-            return None, None, None
-            
-        # Create debug images dictionary
-        debug_images = {}
-        
-        # Apply mask to image
-        masked_image = cv2.bitwise_and(image, image, mask=mask)
-        debug_images['original_masked'] = masked_image.copy()
-        
-        # Convert to grayscale for texture analysis
-        gray = cv2.cvtColor(masked_image, cv2.COLOR_BGR2GRAY)
-        
-        # Calculate local standard deviation (texture measure)
-        kernel_size = 3  # Smaller kernel for fine hair details
-        kernel = np.ones((kernel_size, kernel_size), np.float32) / (kernel_size * kernel_size)
-        mean = cv2.filter2D(gray.astype(np.float32), -1, kernel)
-        sqr_mean = cv2.filter2D((gray.astype(np.float32))**2, -1, kernel)
-        # Ensure we don't have negative values before sqrt (can happen due to floating point precision)
-        variance = np.maximum(0, sqr_mean - mean**2)  # type: ignore # Clamp to zero
-        std_dev = np.sqrt(variance)
-        
-        # Normalize std_dev for visualization
-        std_dev_norm = cv2.normalize(std_dev, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8) # type: ignore
-        debug_images['texture_map'] = cv2.applyColorMap(std_dev_norm, cv2.COLORMAP_JET)
-        
-        # Hair has higher texture than skin - use adaptive threshold based on percentile
-        # Higher percentile = more selective (only highest texture areas)
-        texture_percentile = 70  # Adjust as needed
-        texture_threshold = np.percentile(std_dev[mask > 0], texture_percentile)
-        
-        # Create texture-based mask
-        texture_mask = np.zeros_like(mask)
-        texture_mask[std_dev > texture_threshold] = 255
-        texture_mask = cv2.bitwise_and(texture_mask, mask)  # Only within the eyebrow region
-        debug_images['texture_mask'] = cv2.cvtColor(texture_mask, cv2.COLOR_GRAY2BGR)
-        
-        # Also use darkness as a secondary feature - hair is typically darker
-        dark_mask = np.zeros_like(mask)
-        dark_condition = np.less(gray, 100)  # Aggressive threshold
-        mask_condition = np.greater(mask, 0)
-        dark_pixels = np.logical_and(dark_condition, mask_condition)
-        dark_mask[dark_pixels] = 255
-        debug_images['dark_mask'] = cv2.cvtColor(dark_mask, cv2.COLOR_GRAY2BGR)
-        
-        # Combine texture and darkness
-        combined_mask = cv2.bitwise_or(texture_mask, dark_mask)
-        combined_mask = cv2.bitwise_and(combined_mask, mask)  # Ensure we stay within eyebrow region
-        debug_images['combined_mask'] = cv2.cvtColor(combined_mask, cv2.COLOR_GRAY2BGR)
-        
-        # Clean up with morphological operations
-        kernel = np.ones((2,2), np.uint8)
-        refined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
-        refined_mask = cv2.morphologyEx(refined_mask, cv2.MORPH_CLOSE, kernel)
-        debug_images['refined_mask'] = cv2.cvtColor(refined_mask, cv2.COLOR_GRAY2BGR)
-        
-        # Extract hair pixels using the refined mask
-        hair_pixels_img = cv2.bitwise_and(image, image, mask=refined_mask)
-        debug_images['hair_pixels'] = hair_pixels_img.copy()
-        
-        # Get coordinates of non-zero pixels
-        y_coords, x_coords = np.nonzero(refined_mask)
-        
-        # If we don't have enough pixels, try a less aggressive approach
-        if len(y_coords) < n_colors * 10:
-            # Fall back to Otsu's thresholding for automatic threshold detection
-            _, otsu_mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-            otsu_mask = cv2.bitwise_and(otsu_mask, mask)
-            debug_images['otsu_mask'] = cv2.cvtColor(otsu_mask, cv2.COLOR_GRAY2BGR)
-            
-            # Clean up with morphological operations
-            otsu_mask = cv2.morphologyEx(otsu_mask, cv2.MORPH_OPEN, kernel)
-            otsu_mask = cv2.morphologyEx(otsu_mask, cv2.MORPH_CLOSE, kernel)
-            
-            # Extract hair pixels using Otsu mask
-            hair_pixels_img = cv2.bitwise_and(image, image, mask=otsu_mask)
-            debug_images['fallback_pixels'] = hair_pixels_img.copy()
-            
-            # Get new coordinates
-            y_coords, x_coords = np.nonzero(otsu_mask)
-            
-            # If still not enough pixels, return None
-            if len(y_coords) < n_colors * 5:
-                return None, None, debug_images
-        
-        # Extract BGR values at the non-zero coordinates
-        hair_pixels = image[y_coords, x_coords]
-        
-        # Convert from BGR to RGB for display and clustering
-        hair_pixels_rgb = hair_pixels[:, ::-1]
-        
-        # Use DBSCAN for better clustering of hair colors (handles irregular distributions better)
-        try:
-            from sklearn.cluster import DBSCAN
-            
-            # Normalize pixel values for DBSCAN
-            pixels_normalized = hair_pixels_rgb.astype(float) / 255.0
-            
-            # Apply DBSCAN clustering with more relaxed parameters
-            # Higher eps = larger neighborhood, lower min_samples = smaller clusters allowed
-            dbscan = DBSCAN(eps=0.1, min_samples=max(3, len(pixels_normalized) // 200))
-            labels = dbscan.fit_predict(pixels_normalized)
-            
-            # Check if we have enough non-noise points
-            non_noise_count = np.sum(labels != -1)
-            if non_noise_count < len(pixels_normalized) * 0.1:  # If less than 10% of points are clustered
-                # Try again with even more relaxed parameters
-                dbscan = DBSCAN(eps=0.15, min_samples=max(2, len(pixels_normalized) // 300))
-                labels = dbscan.fit_predict(pixels_normalized)
-            
-            # Filter out noise points (label -1)
-            valid_pixels = hair_pixels_rgb[labels != -1]
-            valid_labels = labels[labels != -1]
-            
-            # If we have valid clusters
-            if len(valid_pixels) > 0 and len(np.unique(valid_labels)) >= 1:
-                # Find the n largest clusters
-                unique_labels, counts = np.unique(valid_labels, return_counts=True)
-                sorted_indices = np.argsort(counts)[::-1]  # Sort by count, descending
-                
-                # Take up to n_colors largest clusters
-                largest_clusters = sorted_indices[:min(n_colors, len(sorted_indices))]
-                
-                # Get the mean color of each cluster
-                colors = []
-                percentages = []
-                
-                for cluster_idx in largest_clusters:
-                    cluster_label = unique_labels[cluster_idx]
-                    cluster_pixels = valid_pixels[valid_labels == cluster_label]
-                    cluster_color = np.mean(cluster_pixels, axis=0).astype(int)
-                    colors.append(cluster_color)
-                    percentages.append(counts[cluster_idx] / len(valid_labels) * 100)
-                
-                # If we have fewer than n_colors, try to add more by using KMeans on the largest cluster
-                if len(colors) < n_colors and len(colors) > 0:
-                    largest_cluster_pixels = valid_pixels[valid_labels == unique_labels[sorted_indices[0]]]
-                    if len(largest_cluster_pixels) > n_colors * 10:  # Enough pixels to subdivide
-                        sub_kmeans = KMeans(n_clusters=min(n_colors - len(colors) + 1, 3), random_state=42, n_init=10)
-                        sub_kmeans.fit(largest_cluster_pixels)
-                        sub_colors = sub_kmeans.cluster_centers_.astype(int)
-                        sub_labels = sub_kmeans.labels_
-                        sub_counts = np.bincount(sub_labels)
-                        sub_percentages = sub_counts / len(sub_labels) * percentages[0] / 100  # Scale by parent cluster percentage
-                        
-                        # Add these colors, skipping the first one which is already represented
-                        for i in range(1, len(sub_colors)):
-                            colors.append(sub_colors[i])
-                            percentages.append(sub_percentages[i] * 100)
-                
-                # Convert to numpy arrays
-                colors = np.array(colors)
-                percentages = np.array(percentages)
-                
-                # Sort by percentages again after possible additions
-                if len(colors) > 1:
-                    sorted_indices = np.argsort(percentages)[::-1]
-                    colors = colors[sorted_indices]
-                    percentages = percentages[sorted_indices]
-                
-                return colors, percentages, debug_images
-            
-        except (ImportError, ValueError) as e:
-            # Fall back to KMeans if DBSCAN fails or isn't available
-            debug_images['clustering_error'] = np.zeros((50, 200, 3), dtype=np.uint8)
-            cv2.putText(debug_images['clustering_error'], f"DBSCAN error: {str(e)}", (10, 30), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        # Fallback to KMeans clustering
-        kmeans = KMeans(n_clusters=n_colors, random_state=42, n_init=10)
-        kmeans.fit(hair_pixels_rgb)
-        
-        # Get the colors
-        colors = kmeans.cluster_centers_.astype(int)
-        
-        # Get the percentage of each color
-        labels = kmeans.labels_
-        counts = np.bincount(labels)
-        percentages = counts / len(labels) * 100
-        
-        # Sort colors by percentage
-        sorted_indices = np.argsort(percentages)[::-1]
-        colors = colors[sorted_indices]
-        percentages = percentages[sorted_indices]
-        
-        return colors, percentages, debug_images
-        
-    def extract_eyebrow_hairs_only(self, image, mask, n_colors=3):
-        """
-        Extract ONLY eyebrow hairs using aggressive filtering to exclude skin tones.
-        This method is specifically designed for eyebrows where we want to focus
-        exclusively on the hair strands and completely ignore surrounding skin.
-        
-        Args:
-            image: Input image (BGR format)
-            mask: Binary mask for the region of interest
-            n_colors: Number of dominant colors to extract
-            
-        Returns:
-            colors: Array of dominant colors in RGB format
-            percentages: Percentage of each color in the mask
-            debug_images: Dictionary of debug images showing the processing steps
-        """
-        if mask is None or np.sum(mask) == 0:
-            return None, None, None
-            
-        # Create debug images dictionary
-        debug_images = {}
-        
-        # Apply mask to image
-        masked_image = cv2.bitwise_and(image, image, mask=mask)
-        debug_images['original_masked'] = masked_image.copy()
-        
-        # Convert to different color spaces
-        gray = cv2.cvtColor(masked_image, cv2.COLOR_BGR2GRAY)
-        hsv = cv2.cvtColor(masked_image, cv2.COLOR_BGR2HSV)
-        
-        # 1. Create a very aggressive darkness threshold to isolate only the darkest pixels
-        # This is based on the observation that eyebrow hairs are significantly darker than skin
-        dark_mask = np.zeros_like(mask)
-        # Use np.less for proper array comparison
-        dark_condition = np.less(gray, 100)  # More aggressive threshold
-        mask_condition = np.greater(mask, 0)
-        dark_pixels = np.logical_and(dark_condition, mask_condition)
-        dark_mask[dark_pixels] = 255
-        debug_images['dark_mask'] = cv2.cvtColor(dark_mask, cv2.COLOR_GRAY2BGR)
-        
-        # 2. Apply edge detection to find hair strands
-        edges = cv2.Canny(masked_image, 50, 150)
-        edges = cv2.dilate(edges, np.ones((2,2), np.uint8), iterations=1)
-        edges = cv2.bitwise_and(edges, edges, mask=mask)
-        debug_images['edges'] = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-        
-        # 3. Use color information in HSV space to exclude skin tones
-        h, s, v = cv2.split(hsv)
-        
-        # Create a saturation mask - eyebrow hairs often have higher saturation than skin
-        # Use np arrays for bounds to satisfy type checking
-        lower_s = np.array([30], dtype=np.uint8)  # Minimum saturation
-        sat_mask = np.zeros_like(mask)
-        sat_condition = np.greater(s, lower_s[0])
-        sat_mask[np.logical_and(sat_condition, mask_condition)] = 255
-        debug_images['saturation_mask'] = cv2.cvtColor(sat_mask, cv2.COLOR_GRAY2BGR)
-        
-        # 4. Combine dark mask with edge information
-        combined_mask = cv2.bitwise_or(dark_mask, edges)
-        combined_mask = cv2.bitwise_and(combined_mask, combined_mask, mask=mask)
-        debug_images['combined_mask'] = cv2.cvtColor(combined_mask, cv2.COLOR_GRAY2BGR)
-        
-        # 5. Apply morphological operations to clean up the mask
-        kernel = np.ones((2,2), np.uint8)
-        hair_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
-        hair_mask = cv2.morphologyEx(hair_mask, cv2.MORPH_CLOSE, kernel)
-        debug_images['hair_mask'] = cv2.cvtColor(hair_mask, cv2.COLOR_GRAY2BGR)
-        
-        # 6. Get the final hair pixels
-        hair_pixels = cv2.bitwise_and(image, image, mask=hair_mask)
-        debug_images['hair_pixels'] = hair_pixels.copy()
-        
-        # If we don't have enough pixels, try a less aggressive approach
-        non_zero_indices = np.nonzero(hair_mask)
-        if len(non_zero_indices[0]) < n_colors * 5:
-            # Fall back to a slightly less aggressive threshold
-            dark_mask = np.zeros_like(mask)
-            less_dark_condition = np.less(gray, 120)
-            dark_mask[np.logical_and(less_dark_condition, mask_condition)] = 255
-            hair_pixels = cv2.bitwise_and(image, image, mask=dark_mask)
-            debug_images['fallback_mask'] = cv2.cvtColor(dark_mask, cv2.COLOR_GRAY2BGR)
-            non_zero_indices = np.nonzero(dark_mask)
-            
-            # If still not enough pixels, return None
-            if len(non_zero_indices[0]) < n_colors * 5:
-                return None, None, debug_images
-        
-        # Extract pixels at the non-zero indices
-        pixels = hair_pixels[non_zero_indices[0], non_zero_indices[1]]
-        
-        # Convert from BGR to RGB for display
-        pixels_rgb = pixels[:, ::-1]
-        
-        # Apply KMeans clustering with explicit n_init to avoid warning
-        kmeans = KMeans(n_clusters=n_colors, random_state=42, n_init=10)
-        kmeans.fit(pixels_rgb)
-        
-        # Get the colors
-        colors = kmeans.cluster_centers_.astype(int)
-        
-        # Get the percentage of each color
-        labels = kmeans.labels_
-        counts = np.bincount(labels)
-        percentages = counts / len(labels) * 100
-        
-        # Sort colors by percentage
-        sorted_indices = np.argsort(percentages)[::-1]
-        colors = colors[sorted_indices]
-        percentages = percentages[sorted_indices]
-        
-        return colors, percentages, debug_images
-        
-    def extract_hair_with_matting(self, image, mask, n_colors=3):
-        """Extract eyebrow hairs using advanced matting techniques to preserve fine details
-        
-        Args:
-            image: Input image (BGR format)
-            mask: Binary mask for the region of interest
-            n_colors: Number of dominant colors to extract
-            
-        Returns:
-            colors: Array of dominant colors in RGB format
-            percentages: Percentage of each color in the mask
-            debug_images: Dictionary of debug images showing the processing steps
-        """
-        if mask is None or np.sum(mask) == 0:
-            return None, None, None
-        
-        # Create debug images dictionary
-        debug_images = {}
-        
-        # Apply mask to image
-        masked_image = cv2.bitwise_and(image, image, mask=mask)
-        debug_images['masked_original'] = masked_image.copy()
-        
-        # Convert to different color spaces
-        gray = cv2.cvtColor(masked_image, cv2.COLOR_BGR2GRAY)
-        hsv = cv2.cvtColor(masked_image, cv2.COLOR_BGR2HSV)
-        
-        # 1. Apply bilateral filter to preserve edges while smoothing
-        bilateral = cv2.bilateralFilter(masked_image, 9, 75, 75)
-        debug_images['bilateral'] = bilateral.copy()
-        
-        # 2. Use Laplacian for edge enhancement (focusing on hair strands)
-        gray_bilateral = cv2.cvtColor(bilateral, cv2.COLOR_BGR2GRAY)
-        laplacian = cv2.Laplacian(gray_bilateral, cv2.CV_8U, ksize=5)
-        debug_images['laplacian'] = cv2.cvtColor(laplacian, cv2.COLOR_GRAY2BGR)
-        
-        # 3. Apply adaptive thresholding with a small block size to capture fine details
-        thresh = cv2.adaptiveThreshold(gray_bilateral, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                      cv2.THRESH_BINARY_INV, 7, 2)
-        thresh = cv2.bitwise_and(thresh, thresh, mask=mask)
-        debug_images['adaptive_threshold'] = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-        
-        # 4. Create a hair mask using color information in HSV space
-        # Extract channels
-        h, s, v = cv2.split(hsv)
-        
-        # Create a mask for likely hair pixels (darker and less saturated than skin)
-        hair_mask = np.zeros_like(mask)
-        # Use proper comparison for NumPy arrays
-        dark_pixels = np.where(v < 120, 255, 0).astype(np.uint8)
-        valid_mask = np.where(mask > 0, 255, 0).astype(np.uint8)
-        hair_mask = cv2.bitwise_and(dark_pixels, valid_mask)
-        debug_images['value_mask'] = cv2.cvtColor(hair_mask, cv2.COLOR_GRAY2BGR)
-        
-        # 5. Combine edge information with color information
-        # Enhance edges in the original image
-        edge_enhanced = cv2.addWeighted(masked_image, 0.7, cv2.cvtColor(laplacian, cv2.COLOR_GRAY2BGR), 0.3, 0)
-        debug_images['edge_enhanced'] = edge_enhanced.copy()
-        
-        # 6. Apply guided filter for edge-preserving smoothing (matting-like effect)
-        try:
-            guided_filter = cv2.ximgproc.guidedFilter(masked_image, masked_image, 3, 0.1) # type: ignore
-        except (AttributeError, ImportError):
-            # Fallback if ximgproc is not available
-            guided_filter = bilateral.copy()  # Use bilateral filter as fallback
-        debug_images['guided_filter'] = guided_filter.copy()
-        
-        # 7. Create final hair mask by combining techniques
-        # Combine threshold with hair mask
-        combined_mask = cv2.bitwise_or(thresh, hair_mask)
-        
-        # Clean up with morphological operations
-        kernel = np.ones((2,2), np.uint8)
-        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
-        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
-        debug_images['combined_mask'] = cv2.cvtColor(combined_mask, cv2.COLOR_GRAY2BGR)
-        
-        # 8. Apply the mask to the edge-enhanced image to get hair pixels
-        hair_pixels = cv2.bitwise_and(edge_enhanced, edge_enhanced, mask=combined_mask)
-        debug_images['hair_pixels'] = hair_pixels.copy()
-        
-        # 9. Create a matting-like result by blending
-        # Create a 3-channel mask for blending
-        mask_3ch = cv2.merge([combined_mask, combined_mask, combined_mask])
-        # Normalize to 0-1 range for alpha blending
-        alpha = mask_3ch.astype(float) / 255.0
-        # Blend original with black background using the mask as alpha
-        matting_result = (masked_image * alpha).astype(np.uint8)
-        debug_images['matting_result'] = matting_result.copy()
-        
-        # Get all non-zero pixels from the matting result
-        # Create a mask of pixels that have at least one channel > 10
-        # Use np.greater to compare arrays properly
-        greater_than_10 = np.greater(matting_result, 10)
-        non_zero_mask = np.any(greater_than_10, axis=2)
-        non_zero_pixels = matting_result[non_zero_mask]
-        
-        # If we don't have enough pixels, try a less aggressive approach
-        if len(non_zero_pixels) < n_colors * 5:
-            # Fall back to simpler dark pixel extraction
-            dark_mask = np.zeros_like(mask)
-            dark_mask[(gray < 130) & (mask > 0)] = 255
-            hair_pixels = cv2.bitwise_and(image, image, mask=dark_mask)
-            debug_images['fallback_mask'] = cv2.cvtColor(dark_mask, cv2.COLOR_GRAY2BGR)
-            non_zero_pixels = hair_pixels[np.where(dark_mask > 0)]
-            
-            # If still not enough pixels, return None
-            if len(non_zero_pixels) < n_colors * 5:
-                return None, None, debug_images
-        
-        # Reshape the pixels for clustering
-        pixels = non_zero_pixels.reshape(-1, 3)
-        
-        # Convert from BGR to RGB for display
-        pixels_rgb = pixels[:, ::-1]
-        
-        # Apply KMeans clustering with explicit n_init to avoid warning
-        kmeans = KMeans(n_clusters=n_colors, random_state=42, n_init=10)
-        kmeans.fit(pixels_rgb)
-        
-        # Get the colors
-        colors = kmeans.cluster_centers_.astype(int)
-        
-        # Get the percentage of each color
-        labels = kmeans.labels_
-        counts = np.bincount(labels)
-        percentages = counts / len(labels) * 100
-        
-        # Sort colors by percentage
-        sorted_indices = np.argsort(percentages)[::-1]
-        colors = colors[sorted_indices]
-        percentages = percentages[sorted_indices]
-        
-        return colors, percentages, debug_images
-        
-    def extract_fine_grained_hair_colors(self, image, mask, n_colors=3):
-        """Advanced method for extracting fine-grained eyebrow hair colors using multiple techniques
-        
-        Args:
-            image: Input image (BGR format)
-            mask: Binary mask for the region of interest
-            n_colors: Number of dominant colors to extract
-            
-        Returns:
-            colors: Array of dominant colors in RGB format
-            percentages: Percentage of each color in the mask
-            debug_images: Dictionary of debug images showing the processing steps
-        """
-        if mask is None or np.sum(mask) == 0:
-            return None, None, None
-        
-        # Create debug images dictionary
-        debug_images = {}
-        
-        # Apply mask to image
-        masked_image = cv2.bitwise_and(image, image, mask=mask)
-        debug_images['masked_original'] = masked_image.copy()
-        
-        # Convert to different color spaces for analysis
-        gray = cv2.cvtColor(masked_image, cv2.COLOR_BGR2GRAY)
-        hsv = cv2.cvtColor(masked_image, cv2.COLOR_BGR2HSV)
-        
-        # 1. Apply edge detection to find hair strands
-        edges = cv2.Canny(gray, 50, 150)
-        debug_images['edges'] = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-        
-        # 2. Apply adaptive thresholding to separate hairs from skin
-        # Use a small block size to capture fine details
-        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                      cv2.THRESH_BINARY_INV, 11, 2)
-        # Only keep thresholded areas within the original mask
-        thresh = cv2.bitwise_and(thresh, thresh, mask=mask)
-        debug_images['adaptive_threshold'] = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-        
-        # 3. Use color filtering in HSV space to isolate hair-like colors
-        # Eyebrow hairs are typically darker and less saturated than skin
-        h, s, v = cv2.split(hsv)
-        # Low value (darkness) is characteristic of hairs
-        dark_mask = cv2.inRange(v, 0, 120)  # type: ignore # Adjust the upper bound as needed
-        # Low to medium saturation for natural hair colors
-        sat_mask = cv2.inRange(s, 0, 100)   # type: ignore # Adjust as needed
-        # Combine masks
-        hsv_mask = cv2.bitwise_and(dark_mask, sat_mask)
-        hsv_mask = cv2.bitwise_and(hsv_mask, mask)
-        debug_images['hsv_filtering'] = cv2.cvtColor(hsv_mask, cv2.COLOR_GRAY2BGR)
-        
-        # 4. Combine edge detection with thresholding for better hair detection
-        # Dilate edges slightly to connect broken hair strands
-        kernel = np.ones((2,2), np.uint8)
-        dilated_edges = cv2.dilate(edges, kernel, iterations=1)
-        # Combine with threshold
-        combined_mask = cv2.bitwise_or(dilated_edges, thresh)
-        combined_mask = cv2.bitwise_and(combined_mask, mask)  # Keep within original mask
-        debug_images['combined_mask'] = cv2.cvtColor(combined_mask, cv2.COLOR_GRAY2BGR)
-        
-        # 5. Final hair mask: Combine all techniques
-        final_mask = cv2.bitwise_or(combined_mask, hsv_mask)
-        # Clean up with morphological operations
-        kernel = np.ones((2,2), np.uint8)
-        final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel)
-        final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, kernel)
-        debug_images['final_mask'] = cv2.cvtColor(final_mask, cv2.COLOR_GRAY2BGR)
-        
-        # Apply final mask to get hair pixels
-        hair_pixels = cv2.bitwise_and(image, image, mask=final_mask)
-        debug_images['hair_pixels'] = hair_pixels.copy()
-        
-        # Get all non-zero pixels (where the hair mask is applied)
-        non_zero_pixels = hair_pixels[np.where(final_mask > 0)] # type: ignore
-        
-        # If we don't have enough pixels, try a less aggressive approach
-        if len(non_zero_pixels) < n_colors * 5:
-            # Fall back to simpler dark pixel extraction
-            dark_mask = np.zeros_like(mask)
-            dark_mask[(gray < 130) & (mask > 0)] = 255
-            hair_pixels = cv2.bitwise_and(image, image, mask=dark_mask)
-            debug_images['fallback_mask'] = cv2.cvtColor(dark_mask, cv2.COLOR_GRAY2BGR)
-            non_zero_pixels = hair_pixels[np.where(dark_mask > 0)]
-            
-            # If still not enough pixels, return None
-            if len(non_zero_pixels) < n_colors * 5:
-                return None, None, debug_images
-        
-        # Reshape the pixels for clustering
-        pixels = non_zero_pixels.reshape(-1, 3)
-        
-        # Convert from BGR to RGB for display
-        pixels_rgb = pixels[:, ::-1]
-        
-        # Apply KMeans clustering with explicit n_init to avoid warning
-        kmeans = KMeans(n_clusters=n_colors, random_state=42, n_init=10)
-        kmeans.fit(pixels_rgb)
-        
-        # Get the colors
-        colors = kmeans.cluster_centers_.astype(int)
-        
-        # Get the percentage of each color
-        labels = kmeans.labels_
-        counts = np.bincount(labels)
-        percentages = counts / len(labels) * 100
-        
-        # Sort colors by percentage
-        sorted_indices = np.argsort(percentages)[::-1]
-        colors = colors[sorted_indices]
-        percentages = percentages[sorted_indices]
-        
-        return colors, percentages, debug_images
-        
     def analyze_color_properties(self, colors):
         """Analyze properties of the colors (brightness, saturation, etc.)"""
         if colors is None:
