@@ -7,3 +7,6 @@ face-parsing
 face-parsing/assets/ 
 debug_images/
 *.csv
+images_data/
+*.html
+analysis/
