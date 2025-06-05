@@ -560,118 +560,119 @@ if uploaded_file is not None:
                 st.markdown("- Ensure the image contains a clear, well-lit face")
                 st.markdown("- Try uploading a higher resolution image")
                 st.markdown("- Make sure the eyebrows are clearly visible")
-                with tab4:
-                    # Virtual Try-On tab
-                    st.header("Eyebrow Virtual Try-On")
-                    st.markdown("""
-                        This tab allows you to visualize how different eyebrow colors would look on your face.
-                        Adjust the opacity slider to control the intensity of the color effect.
-                    """)
+
+                # with tab4:
+                #     # Virtual Try-On tab
+                #     st.header("Eyebrow Virtual Try-On")
+                #     st.markdown("""
+                #         This tab allows you to visualize how different eyebrow colors would look on your face.
+                #         Adjust the opacity slider to control the intensity of the color effect.
+                #     """)
                     
-                    # Initialize session state for caching if not already done
-                    if 'face_crop_cache' not in st.session_state:
-                        st.session_state.face_crop_cache = None
-                    if 'left_mask_cache' not in st.session_state:
-                        st.session_state.left_mask_cache = None
-                    if 'right_mask_cache' not in st.session_state:
-                        st.session_state.right_mask_cache = None
-                    if 'recolored_images' not in st.session_state:
-                        st.session_state.recolored_images = {}
-                    if 'has_run_facer' not in st.session_state:
-                        st.session_state.has_run_facer = False
+                #     # Initialize session state for caching if not already done
+                #     if 'face_crop_cache' not in st.session_state:
+                #         st.session_state.face_crop_cache = None
+                #     if 'left_mask_cache' not in st.session_state:
+                #         st.session_state.left_mask_cache = None
+                #     if 'right_mask_cache' not in st.session_state:
+                #         st.session_state.right_mask_cache = None
+                #     if 'recolored_images' not in st.session_state:
+                #         st.session_state.recolored_images = {}
+                #     if 'has_run_facer' not in st.session_state:
+                #         st.session_state.has_run_facer = False
                     
-                    try:
-                        # Only run Facer once per session
-                        if not st.session_state.has_run_facer:
-                            st.session_state.face_crop_cache = results.get('face_crop', None)
-                            st.session_state.left_mask_cache = results.get('facer_left_mask', None)
-                            st.session_state.right_mask_cache = results.get('facer_right_mask', None)
-                            st.session_state.has_run_facer = True
+                #     try:
+                #         # Only run Facer once per session
+                #         if not st.session_state.has_run_facer:
+                #             st.session_state.face_crop_cache = results.get('face_crop', None)
+                #             st.session_state.left_mask_cache = results.get('facer_left_mask', None)
+                #             st.session_state.right_mask_cache = results.get('facer_right_mask', None)
+                #             st.session_state.has_run_facer = True
                             
-                            # Store the original results to prevent recomputation
-                            if 'original_results' not in st.session_state:
-                                st.session_state.original_results = results.copy()
-                        else:
-                            # Use the cached results instead of recomputing
-                            results = st.session_state.original_results
+                #             # Store the original results to prevent recomputation
+                #             if 'original_results' not in st.session_state:
+                #                 st.session_state.original_results = results.copy()
+                #         else:
+                #             # Use the cached results instead of recomputing
+                #             results = st.session_state.original_results
                         
-                        # Use the cached values
-                        cropped_face = st.session_state.face_crop_cache
-                        left_eyebrow_mask = st.session_state.left_mask_cache
-                        right_eyebrow_mask = st.session_state.right_mask_cache
+                #         # Use the cached values
+                #         cropped_face = st.session_state.face_crop_cache
+                #         left_eyebrow_mask = st.session_state.left_mask_cache
+                #         right_eyebrow_mask = st.session_state.right_mask_cache
                         
-                        if cropped_face is not None and left_eyebrow_mask is not None and right_eyebrow_mask is not None:
-                            # Display original image
-                            original_face_rgb = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
+                #         if cropped_face is not None and left_eyebrow_mask is not None and right_eyebrow_mask is not None:
+                #             # Display original image
+                #             original_face_rgb = cv2.cvtColor(cropped_face, cv2.COLOR_BGR2RGB)
 
                             
-                            # Pre-defined color palette
-                            color_palette = eyebrow_recoloring.create_color_palette(n_colors=6)
-                            color_names = ["Dark Brown", "Medium Brown", "Light Brown", "Black", "Blonde", "Light Blonde"]
+                #             # Pre-defined color palette
+                #             color_palette = eyebrow_recoloring.create_color_palette(n_colors=6)
+                #             color_names = ["Dark Brown", "Medium Brown", "Light Brown", "Black", "Blonde", "Light Blonde"]
                             
-                            # Opacity control with key to prevent rerunning
-                            st.subheader("Color Intensity")
-                            opacity = st.slider("Opacity", 0.0, 1.0, 0.8, 0.05,
-                                            help="Control how strong the color effect is",
-                                            key="opacity_slider")
+                #             # Opacity control with key to prevent rerunning
+                #             st.subheader("Color Intensity")
+                #             opacity = st.slider("Opacity", 0.0, 1.0, 0.8, 0.05,
+                #                             help="Control how strong the color effect is",
+                #                             key="opacity_slider")
                             
-                            # Pre-render all color variations
-                            st.subheader("Eyebrow Color Options")
+                #             # Pre-render all color variations
+                #             st.subheader("Eyebrow Color Options")
                             
-                            # Create two rows of 3 colors each
-                            row1, row2 = st.columns(3), st.columns(3)
-                            all_cols = [row1[0], row1[1], row1[2], row2[0], row2[1], row2[2]]
+                #             # Create two rows of 3 colors each
+                #             row1, row2 = st.columns(3), st.columns(3)
+                #             all_cols = [row1[0], row1[1], row1[2], row2[0], row2[1], row2[2]]
                             
-                            # Clear cached images when opacity changes
-                            current_opacity_key = f"current_opacity_{opacity}"
-                            if 'last_opacity' not in st.session_state or st.session_state.last_opacity != opacity:
-                                st.session_state.recolored_images = {}  # Clear cache when opacity changes
-                                st.session_state.last_opacity = opacity
+                #             # Clear cached images when opacity changes
+                #             current_opacity_key = f"current_opacity_{opacity}"
+                #             if 'last_opacity' not in st.session_state or st.session_state.last_opacity != opacity:
+                #                 st.session_state.recolored_images = {}  # Clear cache when opacity changes
+                #                 st.session_state.last_opacity = opacity
                             
-                            for i, (color, name, col) in enumerate(zip(color_palette, color_names, all_cols)):
-                                # Create a unique key for this color
-                                color_key = f"{name}_{opacity}"
+                #             for i, (color, name, col) in enumerate(zip(color_palette, color_names, all_cols)):
+                #                 # Create a unique key for this color
+                #                 color_key = f"{name}_{opacity}"
                                 
-                                # Check if we already have this color+opacity combination cached
-                                if color_key not in st.session_state.recolored_images:
-                                    # Apply recoloring with this color
-                                    recolored = eyebrow_recoloring.recolor_both_eyebrows(
-                                        cropped_face, left_eyebrow_mask, right_eyebrow_mask, 
-                                        color, preserve_highlights=True, preserve_texture=True, opacity=opacity
-                                    )
-                                    # Convert to RGB and cache the result
-                                    recolored_rgb = cv2.cvtColor(recolored, cv2.COLOR_BGR2RGB)
-                                    st.session_state.recolored_images[color_key] = recolored_rgb
-                                else:
-                                    # Use the cached result
-                                    recolored_rgb = st.session_state.recolored_images[color_key]
+                #                 # Check if we already have this color+opacity combination cached
+                #                 if color_key not in st.session_state.recolored_images:
+                #                     # Apply recoloring with this color
+                #                     recolored = eyebrow_recoloring.recolor_both_eyebrows(
+                #                         cropped_face, left_eyebrow_mask, right_eyebrow_mask, 
+                #                         color, preserve_highlights=True, preserve_texture=True, opacity=opacity
+                #                     )
+                #                     # Convert to RGB and cache the result
+                #                     recolored_rgb = cv2.cvtColor(recolored, cv2.COLOR_BGR2RGB)
+                #                     st.session_state.recolored_images[color_key] = recolored_rgb
+                #                 else:
+                #                     # Use the cached result
+                #                     recolored_rgb = st.session_state.recolored_images[color_key]
                                 
-                                # Display in the appropriate column
-                                with col:
-                                    st.image(recolored_rgb, caption=name, use_container_width=True)
+                #                 # Display in the appropriate column
+                #                 with col:
+                #                     st.image(recolored_rgb, caption=name, use_container_width=True)
                                     
-                                    # Show color swatch
-                                    hex_color = f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}"
-                                    st.markdown(f"<div style='background-color: {hex_color}; width: 100%; height: 20px; border-radius: 5px; margin-bottom: 15px;'></div>", 
-                                            unsafe_allow_html=True)
+                #                     # Show color swatch
+                #                     hex_color = f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}"
+                #                     st.markdown(f"<div style='background-color: {hex_color}; width: 100%; height: 20px; border-radius: 5px; margin-bottom: 15px;'></div>", 
+                #                             unsafe_allow_html=True)
                                 
-                                # Technical explanation
-                                with st.expander("How it works"):
-                                    st.markdown("""
-                                    The virtual try-on feature works by:
-                                    1. Using the accurate Facer segmentation masks to identify eyebrow pixels
-                                    2. Applying color transformations only to those pixels
-                                    3. Preserving the natural texture and highlights of your eyebrows
-                                    4. Blending the new color with the original image
+                #                 # Technical explanation
+                #                 with st.expander("How it works"):
+                #                     st.markdown("""
+                #                     The virtual try-on feature works by:
+                #                     1. Using the accurate Facer segmentation masks to identify eyebrow pixels
+                #                     2. Applying color transformations only to those pixels
+                #                     3. Preserving the natural texture and highlights of your eyebrows
+                #                     4. Blending the new color with the original image
                                     
-                                    This creates a realistic preview of how different eyebrow colors would look on your face.
-                                    """)
-                            else:
-                                st.warning("Eyebrow masks not available. Please make sure Facer segmentation succeeded in the 'Facer Segmentation' tab.")
-                        else:
-                            st.error("No face crop available. Please make sure face detection succeeded.")
-                    except Exception as e:
-                        st.error(f"Eyebrow recoloring failed: {e}\nMake sure eyebrow_recoloring.py is properly set up.")
+                #                     This creates a realistic preview of how different eyebrow colors would look on your face.
+                #                     """)
+                #             else:
+                #                 st.warning("Eyebrow masks not available. Please make sure Facer segmentation succeeded in the 'Facer Segmentation' tab.")
+                #         else:
+                #             st.error("No face crop available. Please make sure face detection succeeded.")
+                #     except Exception as e:
+                #         st.error(f"Eyebrow recoloring failed: {e}\nMake sure eyebrow_recoloring.py is properly set up.")
 
 
         with tab4:
