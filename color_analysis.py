@@ -11,6 +11,8 @@ import pandas as pd
 import json
 from colormath.color_objects import sRGBColor, LabColor, LCHabColor, HSVColor
 from colormath.color_conversions import convert_color
+from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
 
 class ColorAnalysis:
     def __init__(self):
@@ -216,7 +218,7 @@ class ColorAnalysis:
         hair_pixels_rgb = hair_pixels[:, ::-1]
         
         # Apply K-means clustering
-        kmeans = KMeans(n_clusters=8, random_state=42, n_init=10,algorithm='lloyd',max_iter=3000)
+        kmeans = KMeans(n_clusters=6, random_state=42, n_init=10,algorithm='lloyd',max_iter=3000)
         kmeans.fit(hair_pixels_rgb)
         
         # Get colors and percentages
@@ -470,3 +472,58 @@ class ColorAnalysis:
             })
         
         return properties
+    
+
+
+
+
+### Other clustering methods : DBSCAN 
+
+    # def extract_colors_from_hair_mask(self, image, hair_mask, n_colors=3):
+    #     """
+    #     Extract colors using DBSCAN clustering.
+    #     Avantage: Trouve automatiquement le nombre de clusters et gère le bruit.
+    #     """
+    #     min_samples = 50 # Minimum number of samples in a cluster
+    #     eps=0.2  
+    #     if hair_mask is None or np.sum(hair_mask) == 0:
+    #         return None, None
+        
+    #     hair_pixels = image[hair_mask > 0]
+    #     if len(hair_pixels) < min_samples * 2:
+    #         return None, None
+        
+    #     hair_pixels_rgb = hair_pixels[:, ::-1]
+        
+    #     # Normalisation pour DBSCAN
+    #     scaler = StandardScaler()
+    #     hair_pixels_scaled = scaler.fit_transform(hair_pixels_rgb)
+        
+    #     # DBSCAN clustering
+    #     dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+    #     labels = dbscan.fit_predict(hair_pixels_scaled)
+        
+    #     # Filtrer le bruit (label -1)
+    #     unique_labels = np.unique(labels)
+    #     unique_labels = unique_labels[unique_labels != -1]
+        
+    #     if len(unique_labels) == 0:
+    #         return None, None
+        
+    #     colors = []
+    #     percentages = []
+        
+    #     for label in unique_labels:
+    #         cluster_pixels = hair_pixels_rgb[labels == label]
+    #         cluster_color = np.mean(cluster_pixels, axis=0).astype(int)
+    #         cluster_percentage = len(cluster_pixels) / len(hair_pixels_rgb) * 100
+            
+    #         colors.append(cluster_color)
+    #         percentages.append(cluster_percentage)
+        
+    #     # Trier par pourcentage
+    #     colors = np.array(colors)
+    #     percentages = np.array(percentages)
+    #     sorted_indices = np.argsort(percentages)[::-1]
+    
+    #     return colors[sorted_indices], percentages[sorted_indices]
