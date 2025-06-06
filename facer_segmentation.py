@@ -137,7 +137,7 @@ class FacerSegmentation:
                 'points': landmarks  # This is the key the parser is looking for
             }
             
-            print(f"Created fake detection covering entire image: {h}x{w}")
+            print(f"Created synthetic face detection covering entire image: {h}x{w}")
             
             # Run the face parser with our fake detection
             with torch.inference_mode():
