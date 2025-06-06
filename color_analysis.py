@@ -16,7 +16,7 @@ from colormath.color_conversions import convert_color
 from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import StandardScaler
 import os
-
+from skimage.feature import local_binary_pattern
 # Import metadata handler
 try:
     from metadata_handler import MetadataHandler
@@ -39,50 +39,51 @@ class ColorAnalysis:
                 print(f"Could not initialize metadata handler: {e}")
                 self.metadata_handler = None
     
+
     def extract_eyebrow_hair_pixels_only(self, image, mask, debug=True):
         """
         ORIGINAL method - keeping it exactly as it was working!
         ENHANCED method to extract ONLY eyebrow hair pixels, with improved black hair detection.
-        Uses multiple techniques including HSV thresholding, edge detection, and enhanced LAB analysis.
-        
+        Includes LBP and Gabor filter visualizations for debugging purposes.
+
         Args:
             image: Input image (BGR format)
             mask: Binary mask for the eyebrow region from Facer segmentation
             debug: Whether to return debug images
-            
+
         Returns:
             hair_mask: Binary mask containing only hair pixels (LAB-based final result)
             debug_images: Dictionary of debug images showing the process
         """
         debug_images = {}
-        
+
         if mask is None or np.sum(mask) == 0:
             return None, debug_images
-        
+
         # Apply the eyebrow mask to the image
         masked_image = cv2.bitwise_and(image, image, mask=mask)
         debug_images['1_masked_original'] = cv2.cvtColor(masked_image.copy(), cv2.COLOR_BGR2RGB)
-        
+
         # Convert to different color spaces
         gray = cv2.cvtColor(masked_image, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(masked_image, cv2.COLOR_BGR2HSV)
         lab = cv2.cvtColor(masked_image, cv2.COLOR_BGR2LAB)
-        
+
         debug_images['2_gray'] = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
-        
+
         # --- METHOD 1: Enhanced HSV-based hair detection ---
         h, s, v = cv2.split(hsv)
-        
+
         # Create hair mask based on low brightness (Value channel)
         hair_value_mask = np.zeros_like(mask)
-        
+
         # Enhanced adaptive threshold for black hair
         masked_v = v[mask > 0]
         if len(masked_v) > 0:
             v_min = np.min(masked_v)
             v_10th = np.percentile(masked_v, 10)
             v_mean = np.mean(masked_v)
-            
+
             # Detect if this is likely black hair
             if v_10th < 30 and v_min < 20:
                 # Very dark hair - use aggressive threshold
@@ -98,62 +99,62 @@ class ColorAnalysis:
                 value_threshold = min(value_threshold, 80)
         else:
             value_threshold = 50
-            
+
         hair_value_mask[(v < value_threshold) & (mask > 0)] = 255
         debug_images['3_hsv_value_mask'] = cv2.cvtColor(hair_value_mask, cv2.COLOR_GRAY2RGB)
         debug_images['3_threshold_used'] = f"HSV Value threshold: {value_threshold}"
-        
+
         # Additional saturation filtering
         hair_sat_mask = np.zeros_like(mask)
         hair_sat_mask[(s > 8) & (mask > 0)] = 255  # Very permissive for black hair
         debug_images['4_hsv_saturation_mask'] = cv2.cvtColor(hair_sat_mask, cv2.COLOR_GRAY2RGB)
-        
+
         # Combine HSV masks
         hsv_hair_mask = cv2.bitwise_and(hair_value_mask, hair_sat_mask)
         debug_images['5_combined_hsv_mask'] = cv2.cvtColor(hsv_hair_mask, cv2.COLOR_GRAY2RGB)
-        
+
         # --- METHOD 2: Edge detection for hair strands ---
         bilateral = cv2.bilateralFilter(gray, 9, 75, 75)
         edges = cv2.Canny(bilateral, 20, 80)  # Lower thresholds for finer hair detection
         edges = cv2.bitwise_and(edges, edges, mask=mask)
-        
+
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
         edges_dilated = cv2.dilate(edges, kernel, iterations=1)
         debug_images['6_edge_detection'] = cv2.cvtColor(edges_dilated, cv2.COLOR_GRAY2RGB)
-        
+
         # --- METHOD 3: Texture-based detection ---
         kernel_size = 5
         kernel = np.ones((kernel_size, kernel_size), np.float32) / (kernel_size * kernel_size)
-        
+
         gray_float = gray.astype(np.float32)
         mean_img = cv2.filter2D(gray_float, -1, kernel)
         sqr_mean_img = cv2.filter2D(gray_float * gray_float, -1, kernel)
-        
+
         variance = np.maximum(0.0, sqr_mean_img - mean_img * mean_img)
-        
+
         variance_norm = np.zeros_like(variance, dtype=np.uint8)
         cv2.normalize(variance, variance_norm, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-        
+
         texture_threshold = np.percentile(variance_norm[mask > 0], 60) if np.sum(mask) > 0 else 50
         texture_mask = np.zeros_like(mask)
         texture_mask[(variance_norm > texture_threshold) & (mask > 0)] = 255
         debug_images['7_texture_variance'] = cv2.cvtColor(variance_norm, cv2.COLOR_GRAY2RGB)
         debug_images['8_texture_mask'] = cv2.cvtColor(texture_mask, cv2.COLOR_GRAY2RGB)
-        
+
         # --- METHOD 4: ENHANCED LAB color space analysis ---
         l_channel, a_channel, b_channel = cv2.split(lab)
-        
+
         # Enhanced adaptive LAB threshold for black hair detection
         def get_adaptive_lab_threshold(l_channel, mask):
             if np.sum(mask) == 0:
                 return 50
-            
+
             masked_l = l_channel[mask > 0]
             l_mean = np.mean(masked_l)
             l_min = np.min(masked_l)
             l_10th = np.percentile(masked_l, 10)
             l_25th = np.percentile(masked_l, 25)
-            
+
             # Enhanced detection for very dark/black hair
             if l_10th < 25 and l_min < 15:
                 # Definitely black hair - very aggressive
@@ -171,15 +172,32 @@ class ColorAnalysis:
                 # Light hair
                 threshold = np.percentile(masked_l, 30)
                 debug_images['9_hair_type'] = "Light hair detected"
-            
+
             return min(threshold, 50)  # Cap at 50 for safety
-        
+
         lab_threshold = get_adaptive_lab_threshold(l_channel, mask)
         lab_hair_mask = np.zeros_like(mask)
         lab_hair_mask[(l_channel < lab_threshold) & (mask > 0)] = 255
         debug_images['9_lab_lightness_mask'] = cv2.cvtColor(lab_hair_mask, cv2.COLOR_GRAY2RGB)
         debug_images['9_lab_threshold_used'] = f"LAB L threshold: {lab_threshold:.1f}"
-        
+
+        # --- Visualization Only: Gabor Filters ---
+        gabor_kernels = [cv2.getGaborKernel((9, 9), 4.0, theta, 10.0, 0.5, 0, ktype=cv2.CV_32F)
+                        for theta in np.arange(0, np.pi, np.pi / 8)]
+        gabor_response = np.zeros_like(gray, dtype=np.float32)
+        for kernel in gabor_kernels:
+            filtered = cv2.filter2D(gray, cv2.CV_32F, kernel)
+            np.maximum(gabor_response, filtered, gabor_response)
+        gabor_response = cv2.normalize(gabor_response, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8) # type: ignore
+        debug_images['gabor_response'] = cv2.cvtColor(gabor_response, cv2.COLOR_GRAY2RGB)
+
+        # --- Visualization Only: LBP ---
+        radius = 1
+        n_points = 8 * radius
+        lbp = local_binary_pattern(gray, n_points, radius, method="uniform")
+        lbp_response = (lbp / lbp.max() * 255).astype(np.uint8)
+        debug_images['lbp_response'] = cv2.cvtColor(lbp_response, cv2.COLOR_GRAY2RGB)
+
         # --- ENHANCED COMBINATION STRATEGY ---
         # For very dark hair, rely primarily on LAB
         # For lighter hair, use combination approach
@@ -194,48 +212,24 @@ class ColorAnalysis:
             combined_mask = cv2.bitwise_and(combined_mask, lab_hair_mask)
             final_mask = combined_mask
             debug_images['10_strategy'] = "Using combined methods for lighter hair"
-        
+
         # Ensure we stay within the original eyebrow mask
         final_mask = cv2.bitwise_and(final_mask, mask)
         debug_images['10_combined_before_morphology'] = cv2.cvtColor(final_mask, cv2.COLOR_GRAY2RGB)
-        
+
         # --- MORPHOLOGICAL OPERATIONS ---
         kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
         kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        
+
         final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel_open)
         final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, kernel_close)
-        
+
         debug_images['11_final_hair_mask'] = cv2.cvtColor(final_mask, cv2.COLOR_GRAY2RGB)
-        
+
         # Create final visualization
         hair_pixels_img = cv2.bitwise_and(image, image, mask=final_mask)
         debug_images['12_detected_hair_pixels'] = cv2.cvtColor(hair_pixels_img, cv2.COLOR_BGR2RGB)
-        
-        # Enhanced fallback for insufficient pixels
-        final_mask_sum = int(np.sum(final_mask))
-        if final_mask_sum < 30:  # Lowered threshold
-            # More aggressive fallback
-            aggressive_threshold = np.percentile(l_channel[mask > 0], 5) if np.sum(mask) > 0 else 30
-            fallback_mask = np.zeros_like(mask)
-            fallback_mask[(l_channel < aggressive_threshold) & (mask > 0)] = 255
-            
-            fallback_mask = cv2.morphologyEx(fallback_mask, cv2.MORPH_OPEN, kernel_open)
-            fallback_mask = cv2.morphologyEx(fallback_mask, cv2.MORPH_CLOSE, kernel_close)
-            
-            debug_images['13_fallback_mask'] = cv2.cvtColor(fallback_mask, cv2.COLOR_GRAY2RGB)
-            debug_images['13_fallback_note'] = f"Used aggressive fallback: 5th percentile (threshold: {aggressive_threshold:.1f})"
-            
-            fallback_mask_sum = int(np.sum(fallback_mask))
-            if fallback_mask_sum > final_mask_sum:
-                final_mask = fallback_mask
-                hair_pixels_img = cv2.bitwise_and(image, image, mask=final_mask)
-                debug_images['12_detected_hair_pixels'] = cv2.cvtColor(hair_pixels_img, cv2.COLOR_BGR2RGB)
-        
-        # Final statistics
-        final_pixels = int(np.sum(final_mask))
-        debug_images['14_final_stats'] = f"Final threshold: {lab_threshold:.1f}\nPixels detected: {final_pixels}\nStrategy: Enhanced black hair detection"
-        
+
         return final_mask, debug_images
     
     def apply_metadata_adjustments(self, hair_mask, image, mask, metadata):

@@ -41,11 +41,9 @@ This app analyzes eyebrows in facial images to extract insights about:
 # Initialize modules with metadata support
 face_detector = FaceDetector()
 eyebrow_segmentation = EyebrowSegmentation()
-# 🆕 Initialize ColorAnalysis with metadata CSV path
 color_analyzer = ColorAnalysis(metadata_csv_path="data/MCB_DATA_MERGED.csv")
 shape_analyzer = ShapeAnalysis()
 facer_segmenter = FacerSegmentation()
-eyebrow_recoloring = EyebrowRecoloring()
 eyebrow_stats = EyebrowStatistics()
 
 # Load statistics data
@@ -72,7 +70,7 @@ def pil_to_cv2(pil_img):
         return None
     return cv2.cvtColor(np.array(pil_img, dtype=np.uint8), cv2.COLOR_RGB2BGR)
 
-# 🆕 Modified process_image function to pass filename for metadata lookup
+# Modified process_image function to pass filename for metadata lookup
 def process_image(image, filename=None):
     # Detect face landmarks
     face_detector = FaceDetector(use_gpu=True)
@@ -274,7 +272,7 @@ if uploaded_file is not None:
     
     if results:
         # Create tabs for different analyses
-        tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Shape Analysis", "Facer Segmentation+Color Analysis", "Statistics"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Shape Analysis", "Facer Segmentation+Color Analysis", "Statistics", "Debugging insights"])
         
         with tab1:
             # Overview tab
@@ -692,6 +690,72 @@ if uploaded_file is not None:
                                 title="Average Color Percentages by Side and Dominance",
                                 labels={'Avg %': 'Average Percentage', 'Color': 'Dominant Color Number'})
                     st.plotly_chart(fig, use_container_width=True)
+
+
+        with tab5:
+            st.header("Debugging Insights")
+            st.markdown("""
+            This tab provides detailed debugging information for the eyebrow hair detection process, including:
+            - Intermediate masks and filters
+            - Detected hair pixels
+            - Comparison of different methods (e.g., Gabor filters, LBP, etc.)
+            """)
+
+            # Debugging for Left Eyebrow
+            st.subheader("👈 Left Eyebrow Debugging")
+            left_debug_images = results.get('left_debug_images', {})
+            if left_debug_images:
+                for key, image in left_debug_images.items():
+                    st.write(f"**{key}**")  # Display the key as the title
+                    if isinstance(image, np.ndarray):  # Check if it's a NumPy array
+                        st.image(image, use_container_width=True)
+                    elif isinstance(image, str):  # If it's a string (e.g., a note), display it as text
+                        st.write(image)
+                    st.markdown("---")
+            else:
+                st.warning("No debugging information available for the left eyebrow.")
+
+            # Debugging for Right Eyebrow
+            st.subheader("👉 Right Eyebrow Debugging")
+            right_debug_images = results.get('right_debug_images', {})
+            if right_debug_images:
+                for key, image in right_debug_images.items():
+                    st.write(f"**{key}**")  # Display the key as the title
+                    if isinstance(image, np.ndarray):  # Check if it's a NumPy array
+                        st.image(image, use_container_width=True)
+                    elif isinstance(image, str):  # If it's a string (e.g., a note), display it as text
+                        st.write(image)
+                    st.markdown("---")
+            else:
+                st.warning("No debugging information available for the right eyebrow.")
+
+            # Comparison of Methods
+            st.subheader("🔬 Comparison of Methods")
+            st.markdown("""
+            This section compares different approaches for eyebrow hair detection:
+            - **HSV Thresholding**
+            - **Edge Detection**
+            - **Gabor Filters**
+            - **LBP (Local Binary Patterns)**
+            - **LAB Color Space**
+            """)
+
+            # Display comparison images (if available)
+            comparison_images = {
+                "HSV Thresholding": left_debug_images.get("3_hsv_value_mask"),
+                "Edge Detection": left_debug_images.get("6_edge_detection"),
+                "Gabor Filters": left_debug_images.get("gabor_response"),
+                "LBP Analysis": left_debug_images.get("lbp_response"),
+                "LAB Filtering": left_debug_images.get("9_lab_lightness_mask"),
+            }
+
+            for method, image in comparison_images.items():
+                if image is not None:
+                    st.write(f"**{method}**")
+                    st.image(image, use_container_width=True)
+                else:
+                    st.warning(f"No debug image available for {method}.")
+
 
 # Add information about the app (unchanged)
 st.sidebar.title("About")
