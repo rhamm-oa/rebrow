@@ -190,7 +190,7 @@ def display_robust_analysis_results(robust_results, side_name):
 
 def display_method_selector_and_results(left_robust_results, right_robust_results):
     """
-    Display method selector and results for each method - Shows ALL methods (successful and failed)
+    Display method selector and results for each method - Shows ALL methods with their masks (even failed ones)
     """
     if not left_robust_results or not right_robust_results:
         st.error("Robust analysis results not available")
@@ -271,12 +271,12 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
     with col4:
         st.metric("Both Failed", failed_both, delta=f"{failed_both/total_methods*100:.0f}%")
     
-    st.info(f"📊 **All {total_methods} detection methods shown** - Select any method to view its results and understand why it succeeded or failed")
+    st.info(f"📊 **All {total_methods} detection methods shown** - Select any method to view its results, masks, and failure reasons")
     
     selected_display_name = st.selectbox(
         "Choose a detection method to analyze:",
         options=list(method_display_names.keys()),
-        help="All 11 methods are shown with success indicators. ✅✅=Both sides successful, ⚠️=One side only, ❌=Both failed",
+        help="All 11 methods shown with success indicators. Failed methods will show empty/black masks and diagnostic info.",
         key="method_selector"
     )
     
@@ -287,21 +287,46 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
     
     col1, col2 = st.columns(2)
     
-    # Left eyebrow results
+    # Left eyebrow results - ALWAYS SHOW MASK (even if failed)
     with col1:
         st.subheader("👈 Left Eyebrow")
         left_method_data = left_methods.get(selected_method, {})
         left_color_data = left_robust_results.get('color_results', {}).get(selected_method, {})
         
+        # 🆕 ALWAYS show mask regardless of success/failure
+        if 'mask' in left_method_data and left_method_data['mask'] is not None:
+            mask = left_method_data['mask']
+            mask_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
+            
+            # Show mask statistics
+            total_pixels = np.sum(mask > 0)
+            mask_shape = mask.shape
+            percentage_detected = (total_pixels / (mask_shape[0] * mask_shape[1])) * 100
+            
+            st.image(mask_rgb, caption=f"Detection Mask ({total_pixels} pixels, {percentage_detected:.1f}% of region)", width=400)
+            
+            # Show mask analysis
+            st.write(f"**Mask Analysis:**")
+            st.write(f"- Detected pixels: {total_pixels}")
+            st.write(f"- Mask dimensions: {mask_shape[0]}x{mask_shape[1]}")
+            st.write(f"- Coverage: {percentage_detected:.1f}% of eyebrow region")
+            
+            if total_pixels == 0:
+                st.error("🔍 **MASK IS COMPLETELY BLACK** - This is why the method failed!")
+                st.write("**Possible reasons for black mask:**")
+                st.write("- Thresholds too strict for this image")
+                st.write("- Method not suitable for this hair/skin combination")
+                st.write("- Lighting conditions incompatible with method")
+            elif total_pixels < 10:
+                st.warning(f"🔍 **VERY FEW PIXELS DETECTED** ({total_pixels}) - Likely insufficient for reliable color analysis")
+        else:
+            st.error("🔍 **NO MASK GENERATED** - Method failed to create any detection mask")
+        
+        # Show success/failure status
         if left_method_data.get('success', False):
             st.success(f"✅ Success - {left_method_data.get('pixel_count', 0)} pixels detected")
             st.write(f"**Description:** {left_method_data.get('description', 'N/A')}")
             st.write(f"**Quality Score:** {left_method_data.get('quality_score', 0):.1f}/100")
-            
-            # Show mask
-            if 'mask' in left_method_data and left_method_data['mask'] is not None:
-                mask_rgb = cv2.cvtColor(left_method_data['mask'], cv2.COLOR_GRAY2RGB)
-                st.image(mask_rgb, caption=f"Detection Mask", width=300)
             
             # Show colors if available
             if left_color_data.get('status') == 'Success':
@@ -336,39 +361,83 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
             failure_reason = left_method_data.get('reason', 'Unknown error')
             st.write(f"**Failure reason:** {failure_reason}")
             
-            # 🆕 Show diagnostic information for failed methods
-            with st.expander("🔍 Diagnostic Information", expanded=False):
+            # 🆕 Enhanced diagnostic information for failed methods
+            with st.expander("🔍 **Detailed Failure Analysis**", expanded=True):
                 st.markdown(f"""
                 **Why did this method fail?**
                 
                 **Method:** {selected_method.replace('_', ' ').title()}
                 **Reason:** {failure_reason}
                 
-                **Possible solutions:**
-                - This method may require different lighting conditions
-                - The eyebrow region might be too small for this detection approach
-                - Try methods with higher success rates for similar images
+                **Diagnostic Steps:**
+                1. **Check the mask above** - Is it completely black?
+                2. **If black:** Method's thresholds are too strict for this image
+                3. **If few pixels:** Method detected something but not enough
+                4. **If no mask:** Method crashed during execution
                 
-                **Alternative methods to try:**
-                - Look for methods marked with ✅✅ (successful on both sides)
-                - Check the 'Intelligent Combination' method which uses the best available methods
+                **Method-Specific Troubleshooting:**
                 """)
+                
+                # Method-specific diagnostics
+                if selected_method == 'erosion_method':
+                    st.write("- **Erosion Method**: May fail if initial mask is too small")
+                    st.write("- **Solution**: Try methods with larger initial detection like 'hsv_method'")
+                elif selected_method == 'minimal_method':
+                    st.write("- **Minimal Method**: Should rarely fail - usually detects bottom 5% of pixels")
+                    st.write("- **If failed**: The eyebrow region might be extremely uniform in color")
+                elif selected_method == 'gabor_method':
+                    st.write("- **Gabor Method**: Detects hair texture patterns")
+                    st.write("- **May fail with**: Very smooth eyebrows or low resolution images")
+                elif selected_method == 'outlier_method':
+                    st.write("- **Outlier Method**: Needs sufficient pixel variation for statistics")
+                    st.write("- **May fail with**: Very uniform eyebrow regions")
+                else:
+                    st.write(f"- Check if this method is suitable for your image's lighting/hair type")
+                
+                st.write(f"\n**Alternative methods to try:**")
+                st.write(f"- Look for methods marked with ✅✅ (successful on both sides)")
+                st.write(f"- 'Intelligent Combination' usually works by combining successful methods")
     
-    # Right eyebrow results
+    # Right eyebrow results - ALWAYS SHOW MASK (even if failed)
     with col2:
         st.subheader("👉 Right Eyebrow")
         right_method_data = right_methods.get(selected_method, {})
         right_color_data = right_robust_results.get('color_results', {}).get(selected_method, {})
         
+        # 🆕 ALWAYS show mask regardless of success/failure
+        if 'mask' in right_method_data and right_method_data['mask'] is not None:
+            mask = right_method_data['mask']
+            mask_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
+            
+            # Show mask statistics
+            total_pixels = np.sum(mask > 0)
+            mask_shape = mask.shape
+            percentage_detected = (total_pixels / (mask_shape[0] * mask_shape[1])) * 100
+            
+            st.image(mask_rgb, caption=f"Detection Mask ({total_pixels} pixels, {percentage_detected:.1f}% of region)", width=400)
+            
+            # Show mask analysis
+            st.write(f"**Mask Analysis:**")
+            st.write(f"- Detected pixels: {total_pixels}")
+            st.write(f"- Mask dimensions: {mask_shape[0]}x{mask_shape[1]}")
+            st.write(f"- Coverage: {percentage_detected:.1f}% of eyebrow region")
+            
+            if total_pixels == 0:
+                st.error("🔍 **MASK IS COMPLETELY BLACK** - This is why the method failed!")
+                st.write("**Possible reasons for black mask:**")
+                st.write("- Thresholds too strict for this image")
+                st.write("- Method not suitable for this hair/skin combination")
+                st.write("- Lighting conditions incompatible with method")
+            elif total_pixels < 10:
+                st.warning(f"🔍 **VERY FEW PIXELS DETECTED** ({total_pixels}) - Likely insufficient for reliable color analysis")
+        else:
+            st.error("🔍 **NO MASK GENERATED** - Method failed to create any detection mask")
+        
+        # Show success/failure status
         if right_method_data.get('success', False):
             st.success(f"✅ Success - {right_method_data.get('pixel_count', 0)} pixels detected")
             st.write(f"**Description:** {right_method_data.get('description', 'N/A')}")
             st.write(f"**Quality Score:** {right_method_data.get('quality_score', 0):.1f}/100")
-            
-            # Show mask
-            if 'mask' in right_method_data and right_method_data['mask'] is not None:
-                mask_rgb = cv2.cvtColor(right_method_data['mask'], cv2.COLOR_GRAY2RGB)
-                st.image(mask_rgb, caption=f"Detection Mask", width=300)
             
             # Show colors if available
             if right_color_data.get('status') == 'Success':
@@ -403,22 +472,15 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
             failure_reason = right_method_data.get('reason', 'Unknown error')
             st.write(f"**Failure reason:** {failure_reason}")
             
-            # 🆕 Show diagnostic information for failed methods
-            with st.expander("🔍 Diagnostic Information", expanded=False):
+            # Enhanced diagnostic information for failed methods
+            with st.expander("🔍 **Detailed Failure Analysis**", expanded=True):
                 st.markdown(f"""
                 **Why did this method fail?**
                 
                 **Method:** {selected_method.replace('_', ' ').title()}
                 **Reason:** {failure_reason}
                 
-                **Possible solutions:**
-                - This method may require different lighting conditions
-                - The eyebrow region might be too small for this detection approach
-                - Try methods with higher success rates for similar images
-                
-                **Alternative methods to try:**
-                - Look for methods marked with ✅✅ (successful on both sides)
-                - Check the 'Intelligent Combination' method which uses the best available methods
+                **Check the mask above to see what happened!**
                 """)
     
     # 🆕 Method comparison summary
@@ -456,7 +518,7 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
 
 def display_debugging_grid(left_robust_results, right_robust_results, face_crop):
     """
-    Display debugging grid similar to the debugging script with enlarged masks
+    Display debugging grid with original eyebrow visualization and zoom capabilities
     """
     st.subheader("🔬 Method Comparison Grid")
     
@@ -483,6 +545,29 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
         st.metric("Left Successful", left_successful)
     with col3:
         st.metric("Right Successful", right_successful)
+    
+    # 🆕 Zoom Controls
+    st.subheader("🔍 Magnification Controls")
+    zoom_col1, zoom_col2 = st.columns(2)
+    with zoom_col1:
+        mask_zoom = st.slider("🔍 Mask Image Size", min_value=300, max_value=800, value=600, step=50, 
+                             help="Adjust the size of mask images for detailed inspection")
+    with zoom_col2:
+        show_overlay = st.checkbox("📊 Show Overlay Comparison", value=True, 
+                                  help="Show original eyebrow with mask overlay for better comparison")
+    
+    # Get original eyebrow regions from the results
+    left_initial_mask = left_robust_results.get('debug_images', {}).get('detected_hair_overlay')
+    right_initial_mask = right_robust_results.get('debug_images', {}).get('detected_hair_overlay')
+    
+    # If not available from debug images, try to get from session state or recreate
+    if 'cached_results' in st.session_state:
+        cached_results = st.session_state.cached_results.get('results', {})
+        left_eyebrow_mask = cached_results.get('left_refined_mask')
+        right_eyebrow_mask = cached_results.get('right_refined_mask')
+    else:
+        left_eyebrow_mask = None
+        right_eyebrow_mask = None
     
     # 🆕 Quality Score Explanation
     with st.expander("📊 Understanding Quality Scores", expanded=False):
@@ -514,7 +599,7 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
         - **0-19**: Very poor or failed detection
         """)
     
-    # Method-by-method analysis with larger masks
+    # Method-by-method analysis with enhanced visualization
     st.subheader("📊 Method-by-Method Analysis")
     
     for method_info in comparison_data:
@@ -558,28 +643,63 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                 else:
                     st.error(f"Right Quality: {right_quality:.1f}")
             
-            # 🔍 ENLARGED Visual results with "hand lens" detail view
+            # 🔍 ENHANCED Visual results with original eyebrow comparison
             st.markdown("---")
-            st.markdown("### 🔍 Detailed Mask Analysis (Enlarged View)")
+            st.markdown("### 🔍 Detailed Mask Analysis (Enlarged View with Original Comparison)")
             
             visual_col1, visual_col2 = st.columns(2)
             
-            # Left side: masks
+            # Left side: Enhanced analysis
             with visual_col1:
-                st.markdown("#### Left Eyebrow")
+                st.markdown("#### 👈 Left Eyebrow Analysis")
+                
+                # Create original eyebrow region for comparison
+                if face_crop is not None and left_eyebrow_mask is not None:
+                    # Extract original eyebrow region
+                    original_left_region = extract_eyebrow_region(face_crop, left_eyebrow_mask)
+                    if original_left_region is not None:
+                        original_left_rgb = cv2.cvtColor(original_left_region, cv2.COLOR_BGR2RGB)
+                        
+                        # Show original eyebrow region
+                        st.write("**📷 Original Eyebrow Region:**")
+                        st.image(original_left_rgb, caption="Original Left Eyebrow", width=mask_zoom//2)
+                
+                # Show detection mask
                 if method_info['left_mask'] is not None and method_info['left_success']:
                     mask_rgb = cv2.cvtColor(method_info['left_mask'], cv2.COLOR_GRAY2RGB)
-                    # 🆕 Much larger mask image for detailed viewing
-                    st.image(mask_rgb, caption=f"Left - {method_info['display_name']} Detection", width=600)
                     
-                    # Additional mask details
-                    st.write(f"**Pixels detected:** {method_info['left_pixels']}")
-                    st.write(f"**Quality score:** {method_info['left_quality']:.1f}/100")
+                    # Extract detected region for better visualization
+                    detected_region = extract_eyebrow_region_with_mask(face_crop, method_info['left_mask'])
+                    
+                    st.write(f"**🎯 Detection Mask ({method_info['display_name']}):**")
+                    st.image(mask_rgb, caption=f"Left Detection Mask", width=mask_zoom)
+                    
+                    # Show overlay if requested
+                    if show_overlay and face_crop is not None:
+                        overlay_img = create_mask_overlay(face_crop, method_info['left_mask'], left_eyebrow_mask)
+                        if overlay_img is not None:
+                            st.write("**🔍 Overlay: Original + Detection:**")
+                            overlay_rgb = cv2.cvtColor(overlay_img, cv2.COLOR_BGR2RGB)
+                            st.image(overlay_rgb, caption="Original (blue) + Detection (green)", width=mask_zoom)
+                    
+                    # Show statistics
+                    mask_stats = analyze_mask_statistics(method_info['left_mask'], left_eyebrow_mask if left_eyebrow_mask is not None else method_info['left_mask'])
+                    st.write("**📊 Detection Statistics:**")
+                    for key, value in mask_stats.items():
+                        st.write(f"- {key}: {value}")
+                        
                 else:
-                    st.write("❌ No mask available")
+                    st.error("❌ No detection mask available")
+                    if face_crop is not None and left_eyebrow_mask is not None:
+                        # Still show original region for reference
+                        original_left_region = extract_eyebrow_region(face_crop, left_eyebrow_mask)
+                        if original_left_region is not None:
+                            original_left_rgb = cv2.cvtColor(original_left_region, cv2.COLOR_BGR2RGB)
+                            st.write("**📷 Original Eyebrow Region (for reference):**")
+                            st.image(original_left_rgb, caption="Original Left Eyebrow", width=mask_zoom//2)
                 
                 # Left colors
-                st.markdown("#### Left Colors")
+                st.markdown("#### 🎨 Left Colors")
                 if method_info['left_color_status'] == 'Success' and method_info['left_palette'] is not None:
                     st.image(method_info['left_palette'], caption="Left Colors", width=400)
                     
@@ -587,27 +707,59 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                     if method_info['left_colors'] is not None:
                         for i, (color, pct) in enumerate(zip(method_info['left_colors'], method_info['left_percentages'])):
                             color_bgr = color[::-1]
-                            color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0] # type: ignore
+                            color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0]
                             st.text(f"C{i+1}({pct:.0f}%): L{color_lab[0]} a{color_lab[1]} b{color_lab[2]}")
                 else:
                     st.write(f"Colors: {method_info['left_color_status']}")
             
-            # Right side: masks  
+            # Right side: Enhanced analysis
             with visual_col2:
-                st.markdown("#### Right Eyebrow")
+                st.markdown("#### 👉 Right Eyebrow Analysis")
+                
+                # Create original eyebrow region for comparison
+                if face_crop is not None and right_eyebrow_mask is not None:
+                    # Extract original eyebrow region
+                    original_right_region = extract_eyebrow_region(face_crop, right_eyebrow_mask)
+                    if original_right_region is not None:
+                        original_right_rgb = cv2.cvtColor(original_right_region, cv2.COLOR_BGR2RGB)
+                        
+                        # Show original eyebrow region
+                        st.write("**📷 Original Eyebrow Region:**")
+                        st.image(original_right_rgb, caption="Original Right Eyebrow", width=mask_zoom//2)
+                
+                # Show detection mask
                 if method_info['right_mask'] is not None and method_info['right_success']:
                     mask_rgb = cv2.cvtColor(method_info['right_mask'], cv2.COLOR_GRAY2RGB)
-                    # 🆕 Much larger mask image for detailed viewing
-                    st.image(mask_rgb, caption=f"Right - {method_info['display_name']} Detection", width=600)
                     
-                    # Additional mask details
-                    st.write(f"**Pixels detected:** {method_info['right_pixels']}")
-                    st.write(f"**Quality score:** {method_info['right_quality']:.1f}/100")
+                    st.write(f"**🎯 Detection Mask ({method_info['display_name']}):**")
+                    st.image(mask_rgb, caption=f"Right Detection Mask", width=mask_zoom)
+                    
+                    # Show overlay if requested
+                    if show_overlay and face_crop is not None:
+                        overlay_img = create_mask_overlay(face_crop, method_info['right_mask'], right_eyebrow_mask)
+                        if overlay_img is not None:
+                            st.write("**🔍 Overlay: Original + Detection:**")
+                            overlay_rgb = cv2.cvtColor(overlay_img, cv2.COLOR_BGR2RGB)
+                            st.image(overlay_rgb, caption="Original (blue) + Detection (green)", width=mask_zoom)
+                    
+                    # Show statistics
+                    mask_stats = analyze_mask_statistics(method_info['right_mask'], right_eyebrow_mask if right_eyebrow_mask is not None else method_info['right_mask'])
+                    st.write("**📊 Detection Statistics:**")
+                    for key, value in mask_stats.items():
+                        st.write(f"- {key}: {value}")
+                        
                 else:
-                    st.write("❌ No mask available")
+                    st.error("❌ No detection mask available")
+                    if face_crop is not None and right_eyebrow_mask is not None:
+                        # Still show original region for reference
+                        original_right_region = extract_eyebrow_region(face_crop, right_eyebrow_mask)
+                        if original_right_region is not None:
+                            original_right_rgb = cv2.cvtColor(original_right_region, cv2.COLOR_BGR2RGB)
+                            st.write("**📷 Original Eyebrow Region (for reference):**")
+                            st.image(original_right_rgb, caption="Original Right Eyebrow", width=mask_zoom//2)
                 
                 # Right colors
-                st.markdown("#### Right Colors")
+                st.markdown("#### 🎨 Right Colors")
                 if method_info['right_color_status'] == 'Success' and method_info['right_palette'] is not None:
                     st.image(method_info['right_palette'], caption="Right Colors", width=400)
                     
@@ -615,10 +767,131 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                     if method_info['right_colors'] is not None:
                         for i, (color, pct) in enumerate(zip(method_info['right_colors'], method_info['right_percentages'])):
                             color_bgr = color[::-1]
-                            color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0] # type: ignore
+                            color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0]
                             st.text(f"C{i+1}({pct:.0f}%): L{color_lab[0]} a{color_lab[1]} b{color_lab[2]}")
                 else:
                     st.write(f"Colors: {method_info['right_color_status']}")
+
+# 🆕 Helper functions for enhanced visualization
+def extract_eyebrow_region(face_crop, eyebrow_mask, padding=10):
+    """Extract the eyebrow region from face crop using the mask"""
+    if face_crop is None or eyebrow_mask is None:
+        return None
+    
+    try:
+        # Find bounding box of the eyebrow region
+        y_indices, x_indices = np.where(eyebrow_mask > 0)
+        if len(y_indices) == 0 or len(x_indices) == 0:
+            return None
+        
+        y_min, y_max = np.min(y_indices), np.max(y_indices)
+        x_min, x_max = np.min(x_indices), np.max(x_indices)
+        
+        # Add padding
+        h, w = face_crop.shape[:2]
+        y_min = max(0, y_min - padding)
+        y_max = min(h, y_max + padding)
+        x_min = max(0, x_min - padding)
+        x_max = min(w, x_max + padding)
+        
+        # Extract region
+        eyebrow_region = face_crop[y_min:y_max, x_min:x_max]
+        return eyebrow_region
+        
+    except Exception as e:
+        print(f"Error extracting eyebrow region: {e}")
+        return None
+
+def extract_eyebrow_region_with_mask(face_crop, detection_mask, padding=10):
+    """Extract detected eyebrow pixels highlighted on original region"""
+    if face_crop is None or detection_mask is None:
+        return None
+    
+    try:
+        # Create a copy of face crop
+        result = face_crop.copy()
+        
+        # Highlight detected pixels in green
+        result[detection_mask > 0] = [0, 255, 0]  # Green for detected hair
+        
+        # Find bounding box and extract region
+        y_indices, x_indices = np.where(detection_mask > 0)
+        if len(y_indices) == 0:
+            return None
+        
+        y_min, y_max = np.min(y_indices), np.max(y_indices)
+        x_min, x_max = np.min(x_indices), np.max(x_indices)
+        
+        # Add padding
+        h, w = face_crop.shape[:2]
+        y_min = max(0, y_min - padding)
+        y_max = min(h, y_max + padding)
+        x_min = max(0, x_min - padding)
+        x_max = min(w, x_max + padding)
+        
+        # Extract region
+        detected_region = result[y_min:y_max, x_min:x_max]
+        return detected_region
+        
+    except Exception as e:
+        print(f"Error extracting detected region: {e}")
+        return None
+
+def create_mask_overlay(face_crop, detection_mask, original_mask):
+    """Create overlay showing original eyebrow (blue) and detection (green)"""
+    if face_crop is None or detection_mask is None:
+        return None
+    
+    try:
+        # Create overlay image
+        overlay = face_crop.copy()
+        
+        # Show original eyebrow region in blue
+        if original_mask is not None:
+            overlay[original_mask > 0] = overlay[original_mask > 0] * 0.7 + np.array([255, 0, 0]) * 0.3
+        
+        # Show detected pixels in green
+        overlay[detection_mask > 0] = overlay[detection_mask > 0] * 0.7 + np.array([0, 255, 0]) * 0.3
+        
+        return overlay
+        
+    except Exception as e:
+        print(f"Error creating overlay: {e}")
+        return None
+
+def analyze_mask_statistics(detection_mask, reference_mask):
+    """Analyze mask statistics for detailed comparison"""
+    if detection_mask is None:
+        return {"Error": "No detection mask"}
+    
+    stats = {}
+    
+    # Basic statistics
+    detected_pixels = np.sum(detection_mask > 0)
+    total_pixels = detection_mask.size
+    
+    stats["Detected pixels"] = f"{detected_pixels:,}"
+    stats["Total mask pixels"] = f"{total_pixels:,}"
+    stats["Detection percentage"] = f"{(detected_pixels/total_pixels)*100:.2f}%"
+    
+    # Compare with reference if available
+    if reference_mask is not None:
+        reference_pixels = np.sum(reference_mask > 0)
+        if reference_pixels > 0:
+            coverage = (detected_pixels / reference_pixels) * 100
+            stats["Coverage of eyebrow region"] = f"{coverage:.1f}%"
+        
+        # Overlap analysis
+        if detected_pixels > 0:
+            overlap = np.sum((detection_mask > 0) & (reference_mask > 0))
+            overlap_percentage = (overlap / detected_pixels) * 100
+            stats["Overlap with eyebrow region"] = f"{overlap_percentage:.1f}%"
+    
+    # Connected components
+    num_components, _ = cv2.connectedComponents(detection_mask)
+    stats["Connected regions"] = f"{num_components - 1}"  # Subtract background
+    
+    return stats
 
 # Modified process_image function with proper caching that considers n_colors
 def process_image_cached(image, filename=None, n_colors=3):
