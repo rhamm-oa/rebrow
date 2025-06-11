@@ -8,6 +8,8 @@ import json
 import plotly.graph_objects as go
 import plotly.express as px
 import random
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 # Set random seeds for reproducibility
 random.seed(42)
@@ -30,27 +32,49 @@ st.set_page_config(
 )
 
 # App title and description
-st.title("Eyebrow Analysis App")
+st.title("🔬 Advanced Eyebrow Analysis App")
 st.markdown("""
-This app analyzes eyebrows in facial images to extract insights about:
-- Eyebrow color (dominant colors)
-- Eyebrow shape and characteristics
-- Detailed visualization of eyebrow features
+This app analyzes eyebrows in facial images using **multiple robust detection methods** to extract insights about:
+- 🎨 Eyebrow color (using 11 different detection methods)
+- 📐 Eyebrow shape and characteristics  
+- 🔬 Detailed debugging and method comparison
+- 📊 Comprehensive visualization of results
 """)
 
 # Initialize modules with metadata support
-face_detector = FaceDetector()
-eyebrow_segmentation = EyebrowSegmentation()
-color_analyzer = ColorAnalysis(metadata_csv_path="data/MCB_DATA_MERGED.csv")
-shape_analyzer = ShapeAnalysis()
-facer_segmenter = FacerSegmentation()
-eyebrow_stats = EyebrowStatistics()
+@st.cache_resource
+def initialize_modules():
+    """Initialize all modules once and cache them"""
+    face_detector = FaceDetector()
+    eyebrow_segmentation = EyebrowSegmentation()
+    color_analyzer = ColorAnalysis(metadata_csv_path="data/MCB_DATA_MERGED.csv")
+    shape_analyzer = ShapeAnalysis()
+    facer_segmenter = FacerSegmentation()
+    eyebrow_stats = EyebrowStatistics()
+    
+    # Load statistics data
+    try:
+        eyebrow_stats.load_data('data/valid_results.csv')
+    except Exception as e:
+        st.sidebar.error(f"Error loading statistics data: {e}")
+    
+    return {
+        'face_detector': face_detector,
+        'eyebrow_segmentation': eyebrow_segmentation,
+        'color_analyzer': color_analyzer,
+        'shape_analyzer': shape_analyzer,
+        'facer_segmenter': facer_segmenter,
+        'eyebrow_stats': eyebrow_stats
+    }
 
-# Load statistics data
-try:
-    eyebrow_stats.load_data('data/valid_results.csv')
-except Exception as e:
-    st.sidebar.error(f"Error loading statistics data: {e}")
+# Initialize modules
+modules = initialize_modules()
+face_detector = modules['face_detector']
+eyebrow_segmentation = modules['eyebrow_segmentation']
+color_analyzer = modules['color_analyzer']
+shape_analyzer = modules['shape_analyzer']
+facer_segmenter = modules['facer_segmenter']
+eyebrow_stats = modules['eyebrow_stats']
 
 # Function to convert OpenCV image to PIL Image
 def cv2_to_pil(cv2_img):
@@ -64,24 +88,565 @@ def cv2_to_pil(cv2_img):
         return Image.fromarray(cv2.cvtColor(cv2_img, cv2.COLOR_BGRA2RGBA))
     return None
 
-# Function to convert PIL Image to OpenCV image
-def pil_to_cv2(pil_img):
-    if pil_img is None:
+def create_method_comparison_grid(left_robust_results, right_robust_results, face_crop):
+    """
+    Create a comprehensive debugging grid similar to the debugging script
+    """
+    if not left_robust_results or not right_robust_results:
         return None
-    return cv2.cvtColor(np.array(pil_img, dtype=np.uint8), cv2.COLOR_RGB2BGR)
+    
+    left_methods = left_robust_results['methods_results']
+    right_methods = right_robust_results['methods_results']
+    left_color_results = left_robust_results['color_results']
+    right_color_results = right_robust_results['color_results']
+    
+    # Get all method names
+    all_methods = set(left_methods.keys()) | set(right_methods.keys())
+    method_list = sorted(list(all_methods))
+    
+    # Create the comparison data
+    comparison_data = []
+    
+    for method_name in method_list:
+        left_method = left_methods.get(method_name, {})
+        right_method = right_methods.get(method_name, {})
+        left_color = left_color_results.get(method_name, {})
+        right_color = right_color_results.get(method_name, {})
+        
+        method_info = {
+            'method_name': method_name,
+            'display_name': left_method.get('name', method_name.replace('_', ' ').title()),
+            'left_success': left_method.get('success', False),
+            'right_success': right_method.get('success', False),
+            'left_pixels': left_method.get('pixel_count', 0),
+            'right_pixels': right_method.get('pixel_count', 0),
+            'left_quality': left_method.get('quality_score', 0),
+            'right_quality': right_method.get('quality_score', 0),
+            'description': left_method.get('description', 'N/A'),
+            'left_color_status': left_color.get('status', 'Failed'),
+            'right_color_status': right_color.get('status', 'Failed'),
+            'left_mask': left_method.get('mask'),
+            'right_mask': right_method.get('mask'),
+            'left_colors': left_color.get('colors'),
+            'right_colors': right_color.get('colors'),
+            'left_percentages': left_color.get('percentages'),
+            'right_percentages': right_color.get('percentages'),
+            'left_palette': left_color.get('palette'),
+            'right_palette': right_color.get('palette')
+        }
+        comparison_data.append(method_info)
+    
+    return comparison_data
 
-# Modified process_image function to pass filename for metadata lookup
-def process_image(image, filename=None):
+def display_robust_analysis_results(robust_results, side_name):
+    """
+    Display comprehensive results from robust analysis
+    """
+    if not robust_results:
+        st.error(f"No robust analysis results available for {side_name}")
+        return
+    
+    st.subheader(f"🔬 {side_name} Eyebrow - Robust Analysis Results")
+    
+    # Display summary
+    summary = robust_results.get('summary', {})
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Methods", summary.get('total_methods', 0))
+    with col2:
+        st.metric("Successful Methods", summary.get('successful_methods', 0))
+    with col3:
+        st.metric("Color Extractions", summary.get('successful_color_extractions', 0))
+    
+    # Display primary results (best method)
+    if robust_results.get('primary_colors') is not None:
+        st.subheader(f"🏆 Primary Results (Best Method: {robust_results.get('best_method', 'Unknown')})")
+        
+        # Show color palette
+        debug_images = robust_results.get('debug_images', {})
+        palette = debug_images.get('color_palette')
+        if palette is not None:
+            st.image(palette, caption="Extracted Color Palette", width=400)
+        
+        # Show color information
+        primary_colors = robust_results['primary_colors']
+        primary_percentages = robust_results['primary_percentages']
+        
+        color_info = color_analyzer.get_color_info(primary_colors, primary_percentages)
+        
+        # Display color table
+        for i, info in enumerate(color_info):
+            with st.expander(f"Color {i+1}: {info['hex']} ({info['percentage']})"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**RGB:** {info['rgb']}")
+                    st.write(f"**HEX:** {info['hex']}")
+                    st.write(f"**LAB:** L:{info['lab'][0]} a:{info['lab'][1]} b:{info['lab'][2]}")
+                with col2:
+                    st.write(f"**LCH:** L:{info['lch'][0]} C:{info['lch'][1]} H:{info['lch'][2]}")
+                    st.write(f"**HSV:** H:{info['hsv'][0]} S:{info['hsv'][1]} V:{info['hsv'][2]}")
+                    st.write(f"**Percentage:** {info['percentage']}")
+
+def display_method_selector_and_results(left_robust_results, right_robust_results):
+    """
+    Display method selector and results for each method - Shows ALL methods (successful and failed)
+    """
+    if not left_robust_results or not right_robust_results:
+        st.error("Robust analysis results not available")
+        return
+    
+    # Get all available methods (including failed ones)
+    left_methods = left_robust_results.get('methods_results', {})
+    right_methods = right_robust_results.get('methods_results', {})
+    all_methods = set(left_methods.keys()) | set(right_methods.keys())
+    
+    # 🆕 Expected methods list to ensure we show all 11
+    expected_methods = [
+        'hsv_method',
+        'lab_method', 
+        'edge_method',
+        'gabor_method',
+        'texture_method',
+        'tophat_method',
+        'outlier_method',
+        'percentile_method',
+        'erosion_method',
+        'minimal_method',
+        'intelligent_combination'
+    ]
+    
+    # Ensure all expected methods are included (add missing ones as failed)
+    for method in expected_methods:
+        if method not in all_methods:
+            # Add missing method as failed
+            left_methods[method] = {'success': False, 'reason': 'Method not executed', 'name': method.replace('_', ' ').title()}
+            right_methods[method] = {'success': False, 'reason': 'Method not executed', 'name': method.replace('_', ' ').title()}
+            all_methods.add(method)
+    
+    # Create method display names with success indicators
+    method_display_names = {}
+    method_success_counts = {}
+    
+    for method_name in sorted(all_methods):  # Sort for consistent order
+        left_method = left_methods.get(method_name, {})
+        right_method = right_methods.get(method_name, {})
+        
+        # Get display name
+        display_name = left_method.get('name') or right_method.get('name') or method_name.replace('_', ' ').title()
+        
+        # Count successes
+        left_success = left_method.get('success', False)
+        right_success = right_method.get('success', False)
+        success_count = sum([left_success, right_success])
+        
+        # Add success indicator to display name
+        if success_count == 2:
+            display_name_with_status = f"✅✅ {display_name} (Both Successful)"
+        elif success_count == 1:
+            side = "Left" if left_success else "Right"
+            display_name_with_status = f"⚠️ {display_name} ({side} Only)"
+        else:
+            display_name_with_status = f"❌ {display_name} (Both Failed)"
+        
+        method_display_names[display_name_with_status] = method_name
+        method_success_counts[method_name] = success_count
+    
+    # Method selector with enhanced info
+    st.subheader("🔧 Method Selection - All 11 Methods")
+    
+    # Show summary statistics
+    total_methods = len(all_methods)
+    successful_both = sum(1 for count in method_success_counts.values() if count == 2)
+    successful_one = sum(1 for count in method_success_counts.values() if count == 1)
+    failed_both = sum(1 for count in method_success_counts.values() if count == 0)
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Methods", total_methods)
+    with col2:
+        st.metric("Both Successful", successful_both, delta=f"{successful_both/total_methods*100:.0f}%")
+    with col3:
+        st.metric("Partial Success", successful_one, delta=f"{successful_one/total_methods*100:.0f}%")
+    with col4:
+        st.metric("Both Failed", failed_both, delta=f"{failed_both/total_methods*100:.0f}%")
+    
+    st.info(f"📊 **All {total_methods} detection methods shown** - Select any method to view its results and understand why it succeeded or failed")
+    
+    selected_display_name = st.selectbox(
+        "Choose a detection method to analyze:",
+        options=list(method_display_names.keys()),
+        help="All 11 methods are shown with success indicators. ✅✅=Both sides successful, ⚠️=One side only, ❌=Both failed",
+        key="method_selector"
+    )
+    
+    selected_method = method_display_names[selected_display_name]
+    
+    # Display results for selected method
+    st.subheader(f"📊 Detailed Results for: {selected_method.replace('_', ' ').title()}")
+    
+    col1, col2 = st.columns(2)
+    
+    # Left eyebrow results
+    with col1:
+        st.subheader("👈 Left Eyebrow")
+        left_method_data = left_methods.get(selected_method, {})
+        left_color_data = left_robust_results.get('color_results', {}).get(selected_method, {})
+        
+        if left_method_data.get('success', False):
+            st.success(f"✅ Success - {left_method_data.get('pixel_count', 0)} pixels detected")
+            st.write(f"**Description:** {left_method_data.get('description', 'N/A')}")
+            st.write(f"**Quality Score:** {left_method_data.get('quality_score', 0):.1f}/100")
+            
+            # Show mask
+            if 'mask' in left_method_data and left_method_data['mask'] is not None:
+                mask_rgb = cv2.cvtColor(left_method_data['mask'], cv2.COLOR_GRAY2RGB)
+                st.image(mask_rgb, caption=f"Detection Mask", width=300)
+            
+            # Show colors if available
+            if left_color_data.get('status') == 'Success':
+                st.success("🎨 Colors extracted successfully")
+                
+                if left_color_data.get('palette') is not None:
+                    st.image(left_color_data['palette'], caption="Color Palette", width=300)
+                
+                # Show color details with LAB values
+                if left_color_data.get('colors') is not None:
+                    colors = left_color_data['colors']
+                    percentages = left_color_data['percentages']
+                    
+                    st.write("**Detected Colors:**")
+                    for i, (color, pct) in enumerate(zip(colors, percentages)):
+                        # Convert to LAB for display
+                        color_bgr = color[::-1]  # RGB to BGR
+                        color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0] # type: ignore
+                        
+                        col_a, col_b = st.columns([1, 3])
+                        with col_a:
+                            hex_color = f'#{color[0]:02x}{color[1]:02x}{color[2]:02x}'
+                            st.markdown(f"<div style='background-color: {hex_color}; width: 100%; height: 50px; border: 1px solid #000;'></div>", unsafe_allow_html=True)
+                        with col_b:
+                            st.write(f"**Color {i+1}:** RGB{tuple(color)} ({pct:.1f}%)")
+                            st.write(f"LAB: L{color_lab[0]} a{color_lab[1]} b{color_lab[2]}")
+                            st.write(f"HEX: {hex_color}")
+            else:
+                st.error(f"❌ Color extraction failed: {left_color_data.get('status', 'Unknown error')}")
+        else:
+            st.error(f"❌ Detection failed")
+            failure_reason = left_method_data.get('reason', 'Unknown error')
+            st.write(f"**Failure reason:** {failure_reason}")
+            
+            # 🆕 Show diagnostic information for failed methods
+            with st.expander("🔍 Diagnostic Information", expanded=False):
+                st.markdown(f"""
+                **Why did this method fail?**
+                
+                **Method:** {selected_method.replace('_', ' ').title()}
+                **Reason:** {failure_reason}
+                
+                **Possible solutions:**
+                - This method may require different lighting conditions
+                - The eyebrow region might be too small for this detection approach
+                - Try methods with higher success rates for similar images
+                
+                **Alternative methods to try:**
+                - Look for methods marked with ✅✅ (successful on both sides)
+                - Check the 'Intelligent Combination' method which uses the best available methods
+                """)
+    
+    # Right eyebrow results
+    with col2:
+        st.subheader("👉 Right Eyebrow")
+        right_method_data = right_methods.get(selected_method, {})
+        right_color_data = right_robust_results.get('color_results', {}).get(selected_method, {})
+        
+        if right_method_data.get('success', False):
+            st.success(f"✅ Success - {right_method_data.get('pixel_count', 0)} pixels detected")
+            st.write(f"**Description:** {right_method_data.get('description', 'N/A')}")
+            st.write(f"**Quality Score:** {right_method_data.get('quality_score', 0):.1f}/100")
+            
+            # Show mask
+            if 'mask' in right_method_data and right_method_data['mask'] is not None:
+                mask_rgb = cv2.cvtColor(right_method_data['mask'], cv2.COLOR_GRAY2RGB)
+                st.image(mask_rgb, caption=f"Detection Mask", width=300)
+            
+            # Show colors if available
+            if right_color_data.get('status') == 'Success':
+                st.success("🎨 Colors extracted successfully")
+                
+                if right_color_data.get('palette') is not None:
+                    st.image(right_color_data['palette'], caption="Color Palette", width=300)
+                
+                # Show color details with LAB values
+                if right_color_data.get('colors') is not None:
+                    colors = right_color_data['colors']
+                    percentages = right_color_data['percentages']
+                    
+                    st.write("**Detected Colors:**")
+                    for i, (color, pct) in enumerate(zip(colors, percentages)):
+                        # Convert to LAB for display
+                        color_bgr = color[::-1]  # RGB to BGR
+                        color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0] # type: ignore
+                        
+                        col_a, col_b = st.columns([1, 3])
+                        with col_a:
+                            hex_color = f'#{color[0]:02x}{color[1]:02x}{color[2]:02x}'
+                            st.markdown(f"<div style='background-color: {hex_color}; width: 100%; height: 50px; border: 1px solid #000;'></div>", unsafe_allow_html=True)
+                        with col_b:
+                            st.write(f"**Color {i+1}:** RGB{tuple(color)} ({pct:.1f}%)")
+                            st.write(f"LAB: L{color_lab[0]} a{color_lab[1]} b{color_lab[2]}")
+                            st.write(f"HEX: {hex_color}")
+            else:
+                st.error(f"❌ Color extraction failed: {right_color_data.get('status', 'Unknown error')}")
+        else:
+            st.error(f"❌ Detection failed")
+            failure_reason = right_method_data.get('reason', 'Unknown error')
+            st.write(f"**Failure reason:** {failure_reason}")
+            
+            # 🆕 Show diagnostic information for failed methods
+            with st.expander("🔍 Diagnostic Information", expanded=False):
+                st.markdown(f"""
+                **Why did this method fail?**
+                
+                **Method:** {selected_method.replace('_', ' ').title()}
+                **Reason:** {failure_reason}
+                
+                **Possible solutions:**
+                - This method may require different lighting conditions
+                - The eyebrow region might be too small for this detection approach
+                - Try methods with higher success rates for similar images
+                
+                **Alternative methods to try:**
+                - Look for methods marked with ✅✅ (successful on both sides)
+                - Check the 'Intelligent Combination' method which uses the best available methods
+                """)
+    
+    # 🆕 Method comparison summary
+    st.markdown("---")
+    st.subheader("📈 Quick Method Performance Overview")
+    
+    # Create a simple performance table
+    performance_data = []
+    for method_name in sorted(all_methods):
+        left_method = left_methods.get(method_name, {})
+        right_method = right_methods.get(method_name, {})
+        
+        display_name = left_method.get('name') or right_method.get('name') or method_name.replace('_', ' ').title()
+        left_success = "✅" if left_method.get('success', False) else "❌"
+        right_success = "✅" if right_method.get('success', False) else "❌"
+        left_pixels = left_method.get('pixel_count', 0)
+        right_pixels = right_method.get('pixel_count', 0)
+        left_quality = left_method.get('quality_score', 0)
+        right_quality = right_method.get('quality_score', 0)
+        
+        performance_data.append({
+            'Method': display_name,
+            'Left': left_success,
+            'Right': right_success,
+            'Left Pixels': left_pixels,
+            'Right Pixels': right_pixels,
+            'Left Quality': f"{left_quality:.1f}",
+            'Right Quality': f"{right_quality:.1f}"
+        })
+    
+    import pandas as pd
+    df = pd.DataFrame(performance_data)
+    st.dataframe(df, use_container_width=True)
+
+
+def display_debugging_grid(left_robust_results, right_robust_results, face_crop):
+    """
+    Display debugging grid similar to the debugging script with enlarged masks
+    """
+    st.subheader("🔬 Method Comparison Grid")
+    
+    comparison_data = create_method_comparison_grid(left_robust_results, right_robust_results, face_crop)
+    
+    if not comparison_data:
+        st.error("No comparison data available")
+        return
+    
+    # Show face crop
+    st.subheader("Original Face Crop")
+    if face_crop is not None:
+        face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
+        st.image(face_rgb, caption="Face Crop", width=400)
+    
+    # Show analysis summary
+    left_successful = sum(1 for method in comparison_data if method['left_success'])
+    right_successful = sum(1 for method in comparison_data if method['right_success'])
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Methods", len(comparison_data))
+    with col2:
+        st.metric("Left Successful", left_successful)
+    with col3:
+        st.metric("Right Successful", right_successful)
+    
+    # 🆕 Quality Score Explanation
+    with st.expander("📊 Understanding Quality Scores", expanded=False):
+        st.markdown("""
+        **Quality Score Calculation (0-100 points):**
+        
+        The quality score evaluates how well each detection method performs based on three factors:
+        
+        🎯 **Pixel Count Score (40% weight):**
+        - **100 points**: Detects 5-40% of the total eyebrow region (optimal range)
+        - **Lower points**: Too few pixels (<5%) or too many pixels (>40%)
+        - **Rationale**: Good methods should detect substantial hair without over-detecting
+        
+        🌑 **Darkness Score (40% weight):**
+        - **100 points**: Detected pixels are significantly darker than the average eyebrow region
+        - **Lower points**: Detected pixels are similar to or lighter than the average
+        - **Rationale**: Hair pixels should be darker than skin pixels
+        
+        🔗 **Spatial Coherence Score (20% weight):**
+        - **100 points**: 1-3 connected components (coherent detection)
+        - **Lower points**: Many scattered components (fragmented detection)
+        - **Rationale**: Hair should form coherent regions, not scattered dots
+        
+        **Interpretation:**
+        - **80-100**: Excellent detection quality
+        - **60-79**: Good detection with minor issues  
+        - **40-59**: Moderate detection, may have artifacts
+        - **20-39**: Poor detection with significant issues
+        - **0-19**: Very poor or failed detection
+        """)
+    
+    # Method-by-method analysis with larger masks
+    st.subheader("📊 Method-by-Method Analysis")
+    
+    for method_info in comparison_data:
+        with st.expander(f"{method_info['display_name']} - {method_info['description']}", expanded=False):
+            
+            # Method information
+            st.write(f"**Method:** {method_info['display_name']}")
+            st.write(f"**Description:** {method_info['description']}")
+            
+            # Results summary
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                if method_info['left_success']:
+                    st.success(f"Left: ✅ {method_info['left_pixels']} pixels")
+                else:
+                    st.error("Left: ❌ Failed")
+            
+            with col2:
+                if method_info['right_success']:
+                    st.success(f"Right: ✅ {method_info['right_pixels']} pixels")
+                else:
+                    st.error("Right: ❌ Failed")
+            
+            with col3:
+                # Color-coded quality score
+                left_quality = method_info['left_quality']
+                if left_quality >= 80:
+                    st.success(f"Left Quality: {left_quality:.1f}")
+                elif left_quality >= 60:
+                    st.warning(f"Left Quality: {left_quality:.1f}")
+                else:
+                    st.error(f"Left Quality: {left_quality:.1f}")
+            
+            with col4:
+                # Color-coded quality score
+                right_quality = method_info['right_quality']
+                if right_quality >= 80:
+                    st.success(f"Right Quality: {right_quality:.1f}")
+                elif right_quality >= 60:
+                    st.warning(f"Right Quality: {right_quality:.1f}")
+                else:
+                    st.error(f"Right Quality: {right_quality:.1f}")
+            
+            # 🔍 ENLARGED Visual results with "hand lens" detail view
+            st.markdown("---")
+            st.markdown("### 🔍 Detailed Mask Analysis (Enlarged View)")
+            
+            visual_col1, visual_col2 = st.columns(2)
+            
+            # Left side: masks
+            with visual_col1:
+                st.markdown("#### Left Eyebrow")
+                if method_info['left_mask'] is not None and method_info['left_success']:
+                    mask_rgb = cv2.cvtColor(method_info['left_mask'], cv2.COLOR_GRAY2RGB)
+                    # 🆕 Much larger mask image for detailed viewing
+                    st.image(mask_rgb, caption=f"Left - {method_info['display_name']} Detection", width=600)
+                    
+                    # Additional mask details
+                    st.write(f"**Pixels detected:** {method_info['left_pixels']}")
+                    st.write(f"**Quality score:** {method_info['left_quality']:.1f}/100")
+                else:
+                    st.write("❌ No mask available")
+                
+                # Left colors
+                st.markdown("#### Left Colors")
+                if method_info['left_color_status'] == 'Success' and method_info['left_palette'] is not None:
+                    st.image(method_info['left_palette'], caption="Left Colors", width=400)
+                    
+                    # Show LAB values
+                    if method_info['left_colors'] is not None:
+                        for i, (color, pct) in enumerate(zip(method_info['left_colors'], method_info['left_percentages'])):
+                            color_bgr = color[::-1]
+                            color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0] # type: ignore
+                            st.text(f"C{i+1}({pct:.0f}%): L{color_lab[0]} a{color_lab[1]} b{color_lab[2]}")
+                else:
+                    st.write(f"Colors: {method_info['left_color_status']}")
+            
+            # Right side: masks  
+            with visual_col2:
+                st.markdown("#### Right Eyebrow")
+                if method_info['right_mask'] is not None and method_info['right_success']:
+                    mask_rgb = cv2.cvtColor(method_info['right_mask'], cv2.COLOR_GRAY2RGB)
+                    # 🆕 Much larger mask image for detailed viewing
+                    st.image(mask_rgb, caption=f"Right - {method_info['display_name']} Detection", width=600)
+                    
+                    # Additional mask details
+                    st.write(f"**Pixels detected:** {method_info['right_pixels']}")
+                    st.write(f"**Quality score:** {method_info['right_quality']:.1f}/100")
+                else:
+                    st.write("❌ No mask available")
+                
+                # Right colors
+                st.markdown("#### Right Colors")
+                if method_info['right_color_status'] == 'Success' and method_info['right_palette'] is not None:
+                    st.image(method_info['right_palette'], caption="Right Colors", width=400)
+                    
+                    # Show LAB values
+                    if method_info['right_colors'] is not None:
+                        for i, (color, pct) in enumerate(zip(method_info['right_colors'], method_info['right_percentages'])):
+                            color_bgr = color[::-1]
+                            color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0] # type: ignore
+                            st.text(f"C{i+1}({pct:.0f}%): L{color_lab[0]} a{color_lab[1]} b{color_lab[2]}")
+                else:
+                    st.write(f"Colors: {method_info['right_color_status']}")
+
+# Modified process_image function with proper caching that considers n_colors
+def process_image_cached(image, filename=None, n_colors=3):
+    """
+    Process image with proper session state caching to avoid reprocessing
+    Also triggers reprocessing when n_colors changes
+    """
+    # Create a cache key based on image and parameters
+    image_hash = hash(image.tobytes())
+    cache_key = f"{image_hash}_{filename}_{n_colors}"
+    
+    # Check if we already have results for this image and parameters
+    if 'cached_results' in st.session_state and st.session_state.cached_results.get('cache_key') == cache_key:
+        print("🚀 Using cached results - no reprocessing needed!")
+        return st.session_state.cached_results['results']
+    
+    print(f"🔄 Processing image (n_colors={n_colors})...")
+    
     # Detect face landmarks
-    face_detector = FaceDetector(use_gpu=True)
-    results = face_detector.detect_face(image)
+    face_detector_local = FaceDetector(use_gpu=True)
+    results = face_detector_local.detect_face(image)
     
     if not results.multi_face_landmarks:
         st.error("No face detected in the image. Please upload another image.")
         return None
     
     # Crop face
-    face_crop, crop_coords = face_detector.crop_face(image, results)
+    face_crop, crop_coords = face_detector_local.crop_face(image, results)
     
     if face_crop is None or crop_coords is None:
         st.error("Could not crop face properly. Please upload another image.")
@@ -91,17 +656,17 @@ def process_image(image, filename=None):
     x_min, y_min, x_max, y_max = crop_coords
     
     # Run landmark detection on the cropped face for better accuracy
-    face_crop_results = face_detector.detect_face(face_crop)
+    face_crop_results = face_detector_local.detect_face(face_crop)
     
     if not face_crop_results.multi_face_landmarks:
         st.error("Could not detect facial landmarks on the cropped face. Please upload another image.")
         return None
     
     # Get eyebrow landmarks (still needed for shape analysis)
-    left_eyebrow, right_eyebrow = face_detector.get_eyebrow_landmarks(image, results, crop_coords)
+    left_eyebrow, right_eyebrow = face_detector_local.get_eyebrow_landmarks(image, results, crop_coords)
     
     if left_eyebrow is None or right_eyebrow is None:
-        left_eyebrow, right_eyebrow = face_detector.get_eyebrow_landmarks(image, results)
+        left_eyebrow, right_eyebrow = face_detector_local.get_eyebrow_landmarks(image, results)
         
         if left_eyebrow is None or right_eyebrow is None:
             st.error("Could not detect eyebrows. Please upload another image.")
@@ -109,8 +674,8 @@ def process_image(image, filename=None):
     
     # *** PRIMARY METHOD: Use Facer segmentation for masks ***
     try:
-        facer_segmenter = FacerSegmentation(use_gpu=True)
-        facer_result = facer_segmenter.segment_eyebrows(face_crop, visualize=True)
+        facer_segmenter_local = FacerSegmentation(use_gpu=True)
+        facer_result = facer_segmenter_local.segment_eyebrows(face_crop, visualize=True)
         
         if facer_result.get('success', False):
             # Use Facer masks as primary masks
@@ -120,11 +685,11 @@ def process_image(image, filename=None):
             st.session_state['facer_available'] = True
         else:
             # Fallback to traditional method only if Facer fails completely
-            eyebrow_segmentation = EyebrowSegmentation()
-            left_mask, left_bbox = eyebrow_segmentation.create_eyebrow_mask(face_crop, left_eyebrow)
-            right_mask, right_bbox = eyebrow_segmentation.create_eyebrow_mask(face_crop, right_eyebrow)
-            left_refined_mask = eyebrow_segmentation.refine_eyebrow_mask(face_crop, left_mask)
-            right_refined_mask = eyebrow_segmentation.refine_eyebrow_mask(face_crop, right_mask)
+            eyebrow_segmentation_local = EyebrowSegmentation()
+            left_mask, left_bbox = eyebrow_segmentation_local.create_eyebrow_mask(face_crop, left_eyebrow)
+            right_mask, right_bbox = eyebrow_segmentation_local.create_eyebrow_mask(face_crop, right_eyebrow)
+            left_refined_mask = eyebrow_segmentation_local.refine_eyebrow_mask(face_crop, left_mask)
+            right_refined_mask = eyebrow_segmentation_local.refine_eyebrow_mask(face_crop, right_mask)
             using_facer_masks = False
             st.session_state['facer_available'] = False
             st.warning("Facer segmentation failed, using traditional method as fallback")
@@ -132,16 +697,25 @@ def process_image(image, filename=None):
     except Exception as e:
         st.warning(f"Facer segmentation failed: {e}. Using traditional method as fallback.")
         # Fallback to traditional method
-        eyebrow_segmentation = EyebrowSegmentation()
-        left_mask, left_bbox = eyebrow_segmentation.create_eyebrow_mask(face_crop, left_eyebrow)
-        right_mask, right_bbox = eyebrow_segmentation.create_eyebrow_mask(face_crop, right_eyebrow)
-        left_refined_mask = eyebrow_segmentation.refine_eyebrow_mask(face_crop, left_mask)
-        right_refined_mask = eyebrow_segmentation.refine_eyebrow_mask(face_crop, right_mask)
+        eyebrow_segmentation_local = EyebrowSegmentation()
+        left_mask, left_bbox = eyebrow_segmentation_local.create_eyebrow_mask(face_crop, left_eyebrow)
+        right_mask, right_bbox = eyebrow_segmentation_local.create_eyebrow_mask(face_crop, right_eyebrow)
+        left_refined_mask = eyebrow_segmentation_local.refine_eyebrow_mask(face_crop, left_mask)
+        right_refined_mask = eyebrow_segmentation_local.refine_eyebrow_mask(face_crop, right_mask)
         using_facer_masks = False
         st.session_state['facer_available'] = False
     
-    # *** 🆕 ENHANCED COLOR ANALYSIS with metadata support ***
-    # Extract colors using the enhanced method with filename for metadata lookup
+    # *** 🆕 ROBUST COLOR ANALYSIS with all methods ***
+    print("🚀 Running robust color analysis...")
+    
+    # Run robust analysis on both eyebrows
+    left_robust_results = color_analyzer.extract_robust_eyebrow_colors(
+        face_crop, left_refined_mask, n_colors, filename=filename)
+    
+    right_robust_results = color_analyzer.extract_robust_eyebrow_colors(
+        face_crop, right_refined_mask, n_colors, filename=filename)
+    
+    # Keep legacy color analysis for backward compatibility
     left_colors, left_percentages, left_debug_images = color_analyzer.extract_reliable_hair_colors(
         face_crop, left_refined_mask, n_colors=3, filename=filename)
     right_colors, right_percentages, right_debug_images = color_analyzer.extract_reliable_hair_colors(
@@ -156,21 +730,21 @@ def process_image(image, filename=None):
     right_color_properties = color_analyzer.analyze_color_properties(right_colors)
     
     # Analyze eyebrow shape (still uses landmarks)
-    shape_analyzer = ShapeAnalysis()
-    left_shape_info = shape_analyzer.analyze_eyebrow_shape(left_eyebrow)
-    right_shape_info = shape_analyzer.analyze_eyebrow_shape(right_eyebrow)
-    left_shape_vis = shape_analyzer.visualize_shape(face_crop, left_eyebrow, left_shape_info)
-    right_shape_vis = shape_analyzer.visualize_shape(face_crop, right_eyebrow, right_shape_info)
-    left_shape_desc = shape_analyzer.get_shape_description(left_shape_info)
-    right_shape_desc = shape_analyzer.get_shape_description(right_shape_info)
+    shape_analyzer_local = ShapeAnalysis()
+    left_shape_info = shape_analyzer_local.analyze_eyebrow_shape(left_eyebrow)
+    right_shape_info = shape_analyzer_local.analyze_eyebrow_shape(right_eyebrow)
+    left_shape_vis = shape_analyzer_local.visualize_shape(face_crop, left_eyebrow, left_shape_info)
+    right_shape_vis = shape_analyzer_local.visualize_shape(face_crop, right_eyebrow, right_shape_info)
+    left_shape_desc = shape_analyzer_local.get_shape_description(left_shape_info)
+    right_shape_desc = shape_analyzer_local.get_shape_description(right_shape_info)
     
     # Draw landmarks on original image for visualization
-    landmarks_image = face_detector.draw_landmarks(image, results)
-    cropped_landmarks_image = face_detector.draw_landmarks(face_crop, face_crop_results)
-    eyebrow_landmarks_image = face_detector.draw_eyebrow_landmarks(face_crop, left_eyebrow, right_eyebrow)
+    landmarks_image = face_detector_local.draw_landmarks(image, results)
+    cropped_landmarks_image = face_detector_local.draw_landmarks(face_crop, face_crop_results)
+    eyebrow_landmarks_image = face_detector_local.draw_eyebrow_landmarks(face_crop, left_eyebrow, right_eyebrow)
     
-    # Return all processed data
-    results = {
+    # Return all processed data including robust results
+    processed_results = {
         'original_image': image,
         'face_crop': face_crop,
         'landmarks_image': landmarks_image,
@@ -182,18 +756,24 @@ def process_image(image, filename=None):
         'facer_result': facer_result if 'facer_result' in locals() else None,
         'left_refined_mask': left_refined_mask,
         'right_refined_mask': right_refined_mask,
+        
+        # Legacy color analysis (for backward compatibility)
         'left_colors': left_colors,
         'right_colors': right_colors,
         'left_percentages': left_percentages,
         'right_percentages': right_percentages,
-        'left_debug_images': left_debug_images,
-        'right_debug_images': right_debug_images,
         'left_palette': left_palette,
         'right_palette': right_palette,
         'left_color_info': left_color_info,
         'right_color_info': right_color_info,
         'left_color_properties': left_color_properties,
         'right_color_properties': right_color_properties,
+        
+        # 🆕 Robust analysis results
+        'left_robust_results': left_robust_results,
+        'right_robust_results': right_robust_results,
+        
+        # Shape analysis
         'left_shape_info': left_shape_info,
         'right_shape_info': right_shape_info,
         'left_shape_vis': left_shape_vis,
@@ -202,7 +782,25 @@ def process_image(image, filename=None):
         'right_shape_desc': right_shape_desc
     }
     
-    return results
+    # Cache the results
+    st.session_state.cached_results = {
+        'cache_key': cache_key,
+        'results': processed_results
+    }
+    
+    print("✅ Results cached successfully!")
+    
+    return processed_results
+
+# Sidebar settings
+st.sidebar.title("🔧 Analysis Settings")
+n_colors = st.sidebar.slider("Number of colors to extract per method", min_value=2, max_value=5, value=3, 
+                            help="Number of dominant colors to extract for each detection method. Changing this will trigger reprocessing.")
+
+show_debug = st.sidebar.checkbox("Show detailed debugging information", value=True, 
+                                help="Display detailed debugging and intermediate results")
+
+st.sidebar.markdown("---")
 
 # File uploader
 uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"], key="image_uploader")
@@ -214,6 +812,10 @@ if 'last_uploaded_file' not in st.session_state:
 # Check if the uploaded file has changed
 if uploaded_file is not None and (st.session_state.last_uploaded_file is None or 
                                  uploaded_file.name != st.session_state.last_uploaded_file):
+    # Clear cache when new image is uploaded
+    if 'cached_results' in st.session_state:
+        del st.session_state.cached_results
+    
     # Reset all caching variables when a new image is uploaded
     st.session_state.face_crop_cache = None
     st.session_state.left_mask_cache = None
@@ -266,13 +868,20 @@ if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
     image = cv2.imdecode(file_bytes, 1)
     
-    # 🆕 Process the image with filename for metadata lookup
-    with st.spinner('Processing image...'):
-        results = process_image(image, filename=uploaded_file.name)
+    # 🆕 Process the image with caching (considers n_colors changes)
+    with st.spinner('Processing image with robust analysis...'):
+        results = process_image_cached(image, filename=uploaded_file.name, n_colors=n_colors)
     
     if results:
-        # Create tabs for different analyses
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Shape Analysis", "Facer Segmentation+Color Analysis", "Statistics", "Debugging insights"])
+        # Create tabs for different analyses - 🆕 RESTORED Statistics tab
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+            "Overview", 
+            "Shape Analysis", 
+            "🆕 Robust Color Analysis", 
+            "Legacy Color Analysis",
+            "Statistics",  # 🆕 RESTORED
+            "🔬 Advanced Debugging"
+        ])
         
         with tab1:
             # Overview tab
@@ -312,7 +921,7 @@ if uploaded_file is not None:
                     st.image(eyebrow_landmarks_image_pil, use_container_width=True)
         
         with tab2:
-            # Shape Analysis tab
+            # Shape Analysis tab (unchanged)
             st.header("Shape Analysis")
             
             col1, col2 = st.columns(2)
@@ -356,10 +965,45 @@ if uploaded_file is not None:
                     st.markdown(f"- Curvature: {results['right_shape_info']['curvature']:.2f} radians")
                     st.markdown(f"- Compactness: {results['right_shape_info']['compactness']:.2f}")
                     st.markdown(f"- Convexity: {results['right_shape_info']['convexity']:.2f}")
-        
+
         with tab3:
-            # 🆕 Enhanced tab with metadata information
-            st.header("Facer Segmentation + Enhanced Hair Color Analysis")
+            # 🆕 NEW: Robust Color Analysis Tab
+            st.header("🔬 Robust Color Analysis with Multiple Methods")
+            
+            st.markdown("""
+            **🚀 Enhanced Analysis Features:**
+            - 🎯 **11 Detection Methods**: HSV, LAB, Edge Detection, Gabor Filters, Texture Analysis, Top-hat, Statistical Outliers, Percentile Thresholding, Erosion-based, Minimal Detection, and Intelligent Combination
+            - 🧠 **Intelligent Fallbacks**: If one method fails, automatically tries alternatives
+            - 📊 **Quality Scoring**: Each method gets a quality score based on pixel count, darkness, and coherence
+            - 🏆 **Best Method Selection**: Automatically selects the best performing method
+            - 🔍 **Method Comparison**: Compare results across all detection methods
+            - 📈 **Smart Caching**: Method selection changes display only, no reprocessing (unless n_colors changes)
+            """)
+            
+            # Check if we have robust results
+            left_robust_results = results.get('left_robust_results')
+            right_robust_results = results.get('right_robust_results')
+            
+            if left_robust_results and right_robust_results:
+                
+                # Display primary results for both eyebrows
+                col1, col2 = st.columns(2)
+                with col1:
+                    display_robust_analysis_results(left_robust_results, "Left")
+                with col2:
+                    display_robust_analysis_results(right_robust_results, "Right")
+                
+                st.markdown("---")
+                
+                # Method selector and individual results
+                display_method_selector_and_results(left_robust_results, right_robust_results)
+                
+            else:
+                st.error("❌ Robust analysis results not available")
+
+        with tab4:
+            # Legacy Color Analysis tab (keep existing functionality)
+            st.header("Legacy Color Analysis (Single Method)")
             
             # Check if we have Facer results
             using_facer = results.get('using_facer_masks', False)
@@ -374,20 +1018,8 @@ if uploaded_file is not None:
                     vis_img_rgb = cv2.cvtColor(vis_img, cv2.COLOR_BGR2RGB)
                     st.image(vis_img_rgb, caption="Facer Segmentation Results", use_container_width=True)
                 
-                # Get the eyebrow masks
-                left_eyebrow_mask = facer_result.get('left_eyebrow_mask')
-                right_eyebrow_mask = facer_result.get('right_eyebrow_mask')
-                
-                # 🆕 Enhanced Color Analysis Section with metadata awareness
-                st.subheader("🎨 Enhanced Hair-Only Color Analysis with Metadata Optimization")
-                st.markdown("""
-                **Algorithm Features:**
-                - 🎯 **Hair-Only Detection**: Isolates actual hair strands, excluding skin tones
-                - 🌈 **Multi-Method Approach**: Combines HSV thresholding, edge detection, texture analysis, and LAB color space
-                - 🔍 **Adaptive Thresholding**: Automatically adjusts to different lighting conditions
-                - 🧠 **Smart Fallbacks**: Multiple detection strategies ensure reliable results
-                - 📊 **Metadata Optimization**: Uses ethnicity and skin cluster data for better accuracy
-                """)
+                # Enhanced Color Analysis Section with metadata awareness
+                st.subheader("🎨 Legacy Hair-Only Color Analysis")
                 
                 color_col1, color_col2 = st.columns(2)
                 
@@ -398,13 +1030,6 @@ if uploaded_file is not None:
                     # Get the analysis results
                     left_colors = results.get('left_colors')
                     left_percentages = results.get('left_percentages') 
-                    left_debug_images = results.get('left_debug_images', {})
-                    
-                    # 🆕 Show metadata info if available
-                    if '0_metadata_applied' in left_debug_images:
-                        st.success(left_debug_images['0_metadata_applied'])
-                    elif '0_metadata' in left_debug_images:
-                        st.info(left_debug_images['0_metadata'])
                     
                     if left_colors is not None and left_percentages is not None:
                         # Display color palette
@@ -436,40 +1061,6 @@ if uploaded_file is not None:
                         left_plotly_lab_3d = color_analyzer.create_plotly_lab_3d(left_colors, left_percentages)
                         if left_plotly_lab_3d is not None:
                             st.plotly_chart(go.Figure(json.loads(left_plotly_lab_3d)), use_container_width=True)
-
-                        # Enhanced Debug Process
-                        with st.expander("🔬 **Enhanced Hair Detection Process**", expanded=False):
-                            st.markdown("""
-                            **This enhanced algorithm uses 4 different methods to isolate hair pixels:**
-                            1. **HSV Analysis**: Detects dark pixels (low brightness)
-                            2. **Edge Detection**: Finds hair strand boundaries  
-                            3. **Texture Analysis**: Identifies textured areas (hair vs smooth skin)
-                            4. **LAB Color Space**: Additional lightness-based filtering
-                            5. **Metadata Optimization**: Adjusts thresholds based on ethnicity and skin cluster
-                            """)
-                            
-                            # Display debug images in order
-                            debug_keys = [
-                                ('1_masked_original', 'Original Masked Region'),
-                                ('3_hsv_value_mask', 'HSV: Dark Pixel Detection'),
-                                ('6_edge_detection', 'Edge Detection: Hair Boundaries'),
-                                ('8_texture_mask', 'Texture Analysis: Hair vs Skin'),
-                                ('9_lab_lightness_mask', 'LAB: Lightness Filtering'),
-                                ('11_final_hair_mask', 'Final Combined Hair Mask'),
-                                ('12_detected_hair_pixels', 'Final Detected Hair Pixels'),
-                            ]
-                            
-                            for key, title in debug_keys:
-                                if key in left_debug_images:
-                                    st.write(f"**{title}**")
-                                    st.image(left_debug_images[key], use_container_width=True)
-                            
-                            # Show enhanced results
-                            if '13_cluster_validation' in left_debug_images:
-                                st.success(left_debug_images['13_cluster_validation'])
-                            
-                            if '14_lab_values' in left_debug_images:
-                                st.info(f"**LAB Values:** {left_debug_images['14_lab_values']}")
                     else:
                         st.warning("⚠️ Could not extract hair colors from left eyebrow")
                 
@@ -480,13 +1071,6 @@ if uploaded_file is not None:
                     # Get the analysis results
                     right_colors = results.get('right_colors')
                     right_percentages = results.get('right_percentages')
-                    right_debug_images = results.get('right_debug_images', {})
-                    
-                    # 🆕 Show metadata info if available
-                    if '0_metadata_applied' in right_debug_images:
-                        st.success(right_debug_images['0_metadata_applied'])
-                    elif '0_metadata' in right_debug_images:
-                        st.info(right_debug_images['0_metadata'])
                     
                     if right_colors is not None and right_percentages is not None:
                         # Display color palette
@@ -518,92 +1102,13 @@ if uploaded_file is not None:
                         right_plotly_lab_3d = color_analyzer.create_plotly_lab_3d(right_colors, right_percentages)
                         if right_plotly_lab_3d is not None:
                             st.plotly_chart(go.Figure(json.loads(right_plotly_lab_3d)), use_container_width=True)
-
-                        # Enhanced Debug Process
-                        with st.expander("🔬 **Enhanced Hair Detection Process**", expanded=False):
-                            st.markdown("""
-                            **This enhanced algorithm uses 4 different methods to isolate hair pixels:**
-                            1. **HSV Analysis**: Detects dark pixels (low brightness)
-                            2. **Edge Detection**: Finds hair strand boundaries  
-                            3. **Texture Analysis**: Identifies textured areas (hair vs smooth skin)
-                            4. **LAB Color Space**: Additional lightness-based filtering
-                            5. **Metadata Optimization**: Adjusts thresholds based on ethnicity and skin cluster
-                            """)
-                            
-                            # Display debug images in order
-                            debug_keys = [
-                                ('1_masked_original', 'Original Masked Region'),
-                                ('3_hsv_value_mask', 'HSV: Dark Pixel Detection'),
-                                ('6_edge_detection', 'Edge Detection: Hair Boundaries'),
-                                ('8_texture_mask', 'Texture Analysis: Hair vs Skin'),
-                                ('9_lab_lightness_mask', 'LAB: Lightness Filtering'),
-                                ('11_final_hair_mask', 'Final Combined Hair Mask'),
-                                ('12_detected_hair_pixels', 'Final Detected Hair Pixels'),
-                            ]
-                            
-                            for key, title in debug_keys:
-                                if key in right_debug_images:
-                                    st.write(f"**{title}**")
-                                    st.image(right_debug_images[key], use_container_width=True)
-                            
-                            # Show enhanced results
-                            if '13_cluster_validation' in right_debug_images:
-                                st.success(right_debug_images['13_cluster_validation'])
-                            
-                            if '14_lab_values' in right_debug_images:
-                                st.info(f"**LAB Values:** {right_debug_images['14_lab_values']}")
                     else:
                         st.warning("⚠️ Could not extract hair colors from right eyebrow")
-                
-                # Technical Information
-                with st.expander("🔧 Technical Information"):
-                    st.markdown("""
-                    ### **Enhanced Hair Detection Algorithm with Metadata Optimization**
-                    
-                    **Problem Solved**: Previous methods were detecting skin tones mixed with hair colors, leading to incorrect light brown results instead of the actual darker hair colors.
-                    
-                    **Solution**: Multi-method approach that focuses exclusively on hair strands:
-                    
-                    1. **HSV Color Space Analysis**:
-                    - Uses Value (brightness) channel to detect dark pixels
-                    - Adaptive thresholding based on image content
-                    - Filters out bright skin tones automatically
-                    
-                    2. **Edge Detection (Canny)**:
-                    - Detects hair strand boundaries and fine textures
-                    - Bilateral filtering preserves edges while reducing noise
-                    - Morphological operations connect broken hair strands
-                    
-                    3. **Texture Analysis**:
-                    - Calculates local variance to distinguish textured (hair) vs smooth (skin) areas
-                    - Uses sliding window approach for local texture measurement
-                    - High variance = hair texture, low variance = smooth skin
-                    
-                    4. **LAB Color Space**:
-                    - Uses L channel (lightness) for additional dark pixel detection
-                    - More perceptually uniform than RGB for color analysis
-                    - Provides robust hair vs skin separation
-                    
-                    5. **🆕 Metadata Optimization**:
-                    - Uses ethnicity and skin cluster data from your CSV file
-                    - Automatically adjusts thresholds for different ethnic groups
-                    - Optimizes detection for specific skin tones (clusters 1-6)
-                    - Applies conservative enhancements for dark skin + dark hair combinations
-                    
-                    **Fallback Strategies**: If one method fails, the algorithm automatically tries alternative approaches to ensure reliable results.
-                    
-                    **Quality Assurance**: Morphological operations clean up the final mask and remove noise while preserving hair details.
-                    """)
-                
             else:
-                st.error("❌ Facer segmentation failed. Cannot perform enhanced color analysis.")
-                st.markdown("**Possible solutions:**")
-                st.markdown("- Ensure the image contains a clear, well-lit face")
-                st.markdown("- Try uploading a higher resolution image")
-                st.markdown("- Make sure the eyebrows are clearly visible")
+                st.error("❌ Facer segmentation failed. Cannot perform color analysis.")
 
-        # Statistics Tab (unchanged)
-        with tab4:
+        # 🆕 RESTORED Statistics Tab
+        with tab5:
             st.header("Eyebrow Color Statistics")
             st.write("Analysis of eyebrow colors across the dataset")
             
@@ -691,81 +1196,62 @@ if uploaded_file is not None:
                                 labels={'Avg %': 'Average Percentage', 'Color': 'Dominant Color Number'})
                     st.plotly_chart(fig, use_container_width=True)
 
-
-        with tab5:
-            st.header("Debugging Insights")
+        with tab6:
+            # 🆕 Advanced Debugging Tab (REMOVED legacy debugging section)
+            st.header("🔬 Advanced Debugging & Method Comparison")
+            
             st.markdown("""
-            This tab provides detailed debugging information for the eyebrow hair detection process, including:
-            - Intermediate masks and filters
-            - Detected hair pixels
-            - Comparison of different methods (e.g., Gabor filters, LBP, etc.)
+            **This advanced debugging section provides:**
+            - 📊 **Method Comparison Grid**: See all 11 methods side-by-side like in the debugging script
+            - 🎯 **Success/Failure Analysis**: Understand why methods succeed or fail
+            - 🔍 **Enlarged Mask View**: "Hand lens" detailed view of detection masks
+            - 📈 **Quality Scores**: See which methods perform best for this image (with explanation)
+            - 🧠 **LAB Color Values**: Detailed color information for each method
             """)
-
-            # Debugging for Left Eyebrow
-            st.subheader("👈 Left Eyebrow Debugging")
-            left_debug_images = results.get('left_debug_images', {})
-            if left_debug_images:
-                for key, image in left_debug_images.items():
-                    st.write(f"**{key}**")  # Display the key as the title
-                    if isinstance(image, np.ndarray):  # Check if it's a NumPy array
-                        st.image(image, use_container_width=True)
-                    elif isinstance(image, str):  # If it's a string (e.g., a note), display it as text
-                        st.write(image)
-                    st.markdown("---")
+            
+            # Get robust results
+            left_robust_results = results.get('left_robust_results')
+            right_robust_results = results.get('right_robust_results')
+            face_crop = results.get('face_crop')
+            
+            if left_robust_results and right_robust_results:
+                # Display debugging grid with enlarged masks and quality explanation
+                display_debugging_grid(left_robust_results, right_robust_results, face_crop)
+                
+                # 🗑️ REMOVED: Legacy Single-Method Debugging section
+                # (This was the section you wanted removed)
+                
             else:
-                st.warning("No debugging information available for the left eyebrow.")
-
-            # Debugging for Right Eyebrow
-            st.subheader("👉 Right Eyebrow Debugging")
-            right_debug_images = results.get('right_debug_images', {})
-            if right_debug_images:
-                for key, image in right_debug_images.items():
-                    st.write(f"**{key}**")  # Display the key as the title
-                    if isinstance(image, np.ndarray):  # Check if it's a NumPy array
-                        st.image(image, use_container_width=True)
-                    elif isinstance(image, str):  # If it's a string (e.g., a note), display it as text
-                        st.write(image)
-                    st.markdown("---")
-            else:
-                st.warning("No debugging information available for the right eyebrow.")
-
-            # Comparison of Methods
-            st.subheader("🔬 Comparison of Methods")
-            st.markdown("""
-            This section compares different approaches for eyebrow hair detection:
-            - **HSV Thresholding**
-            - **Edge Detection**
-            - **Gabor Filters**
-            - **LBP (Local Binary Patterns)**
-            - **LAB Color Space**
-            """)
-
-            # Display comparison images (if available)
-            comparison_images = {
-                "HSV Thresholding": left_debug_images.get("3_hsv_value_mask"),
-                "Edge Detection": left_debug_images.get("6_edge_detection"),
-                "Gabor Filters": left_debug_images.get("gabor_response"),
-                "LBP Analysis": left_debug_images.get("lbp_response"),
-                "LAB Filtering": left_debug_images.get("9_lab_lightness_mask"),
-            }
-
-            for method, image in comparison_images.items():
-                if image is not None:
-                    st.write(f"**{method}**")
-                    st.image(image, use_container_width=True)
-                else:
-                    st.warning(f"No debug image available for {method}.")
+                st.error("❌ Advanced debugging not available - robust analysis failed")
 
 
-# Add information about the app (unchanged)
+# Add information about the app (updated)
 st.sidebar.title("About")
 st.sidebar.info("""
-This app analyzes eyebrows in facial images using computer vision techniques.
-It extracts information about:
-- Eyebrow color and dominant shades
-- Eyebrow shape characteristics
-- Detailed visualization of eyebrow features
-- Metadata-optimized analysis based on ethnicity and skin tone
+**🔬 Advanced Eyebrow Analysis App**
+
+This app analyzes eyebrows using **11 robust detection methods**:
+
+**🎯 Detection Methods:**
+1. HSV Color Space Analysis
+2. LAB Lightness Detection  
+3. Edge Detection (Canny)
+4. Gabor Filter Banks
+5. Texture Variance Analysis
+6. Morphological Top-hat
+7. Statistical Outlier Detection
+8. Percentile Thresholding
+9. Erosion-based Detection
+10. Minimal Detection
+11. Intelligent Combination
+
+**📊 Features:**
+- Smart caching (no reprocessing on method selection)
+- Quality scoring with detailed explanation
+- Method comparison and debugging
+- Enlarged mask visualization
+- Metadata-optimized analysis
+- Interactive visualizations
 
 Upload a high-resolution facial image to get started.
 """)
@@ -773,25 +1259,42 @@ Upload a high-resolution facial image to get started.
 # Add instructions (updated)
 st.sidebar.title("Instructions")
 st.sidebar.markdown("""
-1. Upload a high-resolution facial image (preferably named with ID from dataset)
-2. The app will automatically detect the face and eyebrows
-3. If metadata is found, analysis will be optimized for ethnicity and skin tone
-4. View the analysis results in the different tabs
-5. The "Overview" tab shows the basic detection results
-6. The "Color Analysis" tab shows enhanced hair color detection with metadata optimization
-7. The "Shape Analysis" tab shows the shape characteristics
-8. The "Statistics" tab provides detailed statistics and visualizations of eyebrow colors
+1. **Upload Image**: Choose a high-resolution facial image
+2. **Set Parameters**: Adjust number of colors in the sidebar (triggers reprocessing)
+3. **View Results**: 
+   - **Overview**: Basic face detection
+   - **Shape Analysis**: Geometric measurements
+   - **🆕 Robust Analysis**: 11 detection methods with method selector
+   - **Legacy Analysis**: Single-method approach
+   - **Statistics**: Dataset color statistics
+   - **🔬 Advanced Debugging**: Method comparison with enlarged masks
+
+4. **Method Selection**: Choose different detection methods to compare (no reprocessing!)
+5. **Quality Scores**: Understand method performance with detailed explanations
 """)
 
 # Add technical notes (updated)
 st.sidebar.title("Technical Notes")
 st.sidebar.markdown("""
-- Face detection and landmark extraction using MediaPipe
-- Eyebrow segmentation using Facer neural network + fallback methods
-- Enhanced hair color analysis with metadata optimization
-- Ethnicity and skin cluster-aware thresholding
-- Shape analysis using contour analysis and geometric calculations
-- Multi-method hair detection (HSV, LAB, edges, texture)
+**🔬 Robust Detection Pipeline:**
+- 11 independent detection methods
+- Intelligent fallback strategies
+- Quality scoring (pixel count, darkness, coherence)
+- Automatic best method selection
+- Smart caching (reprocesses only when n_colors changes)
+
+**📊 Analysis Features:**
+- LAB color space optimization
+- Metadata-aware thresholding
+- Edge-preserving filtering
+- Morphological operations
+- Statistical validation
+
+**🔍 Debugging Features:**
+- Enlarged mask visualization (600px width)
+- Quality score breakdown and explanation
+- Color-coded performance indicators
+- Comprehensive method comparison
 """)
 
 if __name__ == "__main__":

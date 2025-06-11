@@ -17,6 +17,8 @@ from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import StandardScaler
 import os
 from skimage.feature import local_binary_pattern
+from scipy import ndimage
+
 # Import metadata handler
 try:
     from metadata_handler import MetadataHandler
@@ -27,7 +29,7 @@ except ImportError:
 class ColorAnalysis:
     def __init__(self, metadata_csv_path=None):
         """
-        Initialize ColorAnalysis with optional metadata support.
+        Initialize ColorAnalysis with optional metadata support and robust methods.
         """
         self.metadata_handler = None
         
@@ -38,22 +40,516 @@ class ColorAnalysis:
             except Exception as e:
                 print(f"Could not initialize metadata handler: {e}")
                 self.metadata_handler = None
-    
 
+    def calculate_method_quality(self, method_mask, gray_image, original_mask):
+        """Calculate quality score for a detection method"""
+        if np.sum(method_mask) == 0:
+            return 0
+        
+        # Factor 1: Reasonable pixel count (not too few, not too many)
+        pixel_ratio = np.sum(method_mask) / np.sum(original_mask)
+        if pixel_ratio < 0.05:  # Less than 5%
+            count_score = pixel_ratio * 100  # Low score for too few
+        elif pixel_ratio > 0.4:  # More than 40%
+            count_score = max(0, 100 - (pixel_ratio - 0.4) * 200)  # Penalty for too many
+        else:
+            count_score = 100
+        
+        # Factor 2: Detected pixels should be darker than average
+        detected_pixels = gray_image[method_mask > 0]
+        all_pixels = gray_image[original_mask > 0]
+        
+        avg_detected = np.mean(detected_pixels)
+        avg_all = np.mean(all_pixels)
+        
+        darkness_score = max(0, min(100, (avg_all - avg_detected) * 2))
+        
+        # Factor 3: Spatial coherence (connected components)
+        num_components, _ = cv2.connectedComponents(method_mask)
+        if num_components <= 3:
+            coherence_score = 100
+        else:
+            coherence_score = max(0, 100 - (num_components - 3) * 10)
+        
+        # Weighted average
+        quality_score = (count_score * 0.4 + darkness_score * 0.4 + coherence_score * 0.2)
+        
+        return quality_score
+
+    def extract_hair_with_robust_fallbacks(self, image, mask):
+        """
+        🆕 ULTRA-ROBUST: Multiple fallback strategies for difficult images
+        """
+        methods_results = {}
+        
+        if mask is None or np.sum(mask) == 0:
+            return methods_results
+        
+        # Apply mask to image
+        masked_image = cv2.bitwise_and(image, image, mask=mask)
+        gray = cv2.cvtColor(masked_image, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(masked_image, cv2.COLOR_BGR2HSV)
+        lab = cv2.cvtColor(masked_image, cv2.COLOR_BGR2LAB)
+        
+        print("🔬 Running robust hair detection with fallbacks...")
+        
+        # 🎯 METHOD 1: ENHANCED HSV (with failure detection)
+        try:
+            h, s, v = cv2.split(hsv)
+            masked_v = v[mask > 0]
+            masked_s = s[mask > 0]
+            
+            if len(masked_v) > 0:
+                v_range = np.max(masked_v) - np.min(masked_v)
+                s_range = np.max(masked_s) - np.min(masked_s)
+                
+                # Check if HSV will be effective
+                if v_range > 30 and s_range > 15:  # Sufficient contrast
+                    v_mean = np.mean(masked_v)
+                    if v_mean > 120:  # Light hair
+                        v_threshold = np.percentile(masked_v, 45)
+                        s_threshold = 12
+                    elif v_mean > 80:  # Medium hair  
+                        v_threshold = np.percentile(masked_v, 35)
+                        s_threshold = 10
+                    else:  # Dark hair
+                        v_threshold = np.percentile(masked_v, 25)
+                        s_threshold = 8
+                    
+                    hsv_mask = np.zeros_like(mask)
+                    hsv_mask[(v < v_threshold) & (s > s_threshold) & (mask > 0)] = 255
+                    
+                    # Clean up
+                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+                    hsv_mask = cv2.morphologyEx(hsv_mask, cv2.MORPH_CLOSE, kernel)
+                    
+                    if np.sum(hsv_mask) > 20:  # Only add if successful
+                        methods_results['hsv_method'] = {
+                            'mask': hsv_mask,
+                            'name': 'HSV Enhanced',
+                            'pixel_count': np.sum(hsv_mask),
+                            'description': f'HSV V<{v_threshold:.0f} + S>{s_threshold}',
+                            'quality_score': self.calculate_method_quality(hsv_mask, gray, mask),
+                            'success': True
+                        }
+                    else:
+                        methods_results['hsv_method'] = {'success': False, 'reason': 'Insufficient pixels detected'}
+                else:
+                    methods_results['hsv_method'] = {'success': False, 'reason': f'Low contrast: V_range={v_range}, S_range={s_range}'}
+            else:
+                methods_results['hsv_method'] = {'success': False, 'reason': 'No pixels in mask'}
+        except Exception as e:
+            methods_results['hsv_method'] = {'success': False, 'reason': f'HSV error: {e}'}
+        
+        # 🎯 METHOD 2: ROBUST LAB (with failure detection)
+        try:
+            l_channel = lab[:, :, 0]
+            a_channel = lab[:, :, 1]
+            b_channel = lab[:, :, 2]
+            
+            masked_l = l_channel[mask > 0]
+            
+            if len(masked_l) > 0:
+                l_range = np.max(masked_l) - np.min(masked_l)
+                
+                if l_range > 25:  # Sufficient lightness contrast
+                    l_mean = np.mean(masked_l)
+                    l_10th = np.percentile(masked_l, 10)
+                    
+                    if l_10th < 35:  # Dark hair present
+                        l_threshold = np.percentile(masked_l, 30)
+                    elif l_mean < 90:  # Medium hair
+                        l_threshold = np.percentile(masked_l, 40)
+                    else:  # Light hair
+                        l_threshold = np.percentile(masked_l, 50)
+                    
+                    lab_mask = np.zeros_like(mask)
+                    lab_mask[(l_channel < l_threshold) & (mask > 0)] = 255
+                    
+                    if np.sum(lab_mask) > 20:
+                        methods_results['lab_method'] = {
+                            'mask': lab_mask,
+                            'name': 'LAB Lightness',
+                            'pixel_count': np.sum(lab_mask),
+                            'description': f'LAB L<{l_threshold:.1f}',
+                            'quality_score': self.calculate_method_quality(lab_mask, gray, mask),
+                            'success': True
+                        }
+                    else:
+                        methods_results['lab_method'] = {'success': False, 'reason': 'LAB threshold too restrictive'}
+                else:
+                    methods_results['lab_method'] = {'success': False, 'reason': f'Low L contrast: {l_range}'}
+            else:
+                methods_results['lab_method'] = {'success': False, 'reason': 'No pixels in mask'}
+        except Exception as e:
+            methods_results['lab_method'] = {'success': False, 'reason': f'LAB error: {e}'}
+        
+        # 🎯 METHOD 3: ENHANCED EDGE DETECTION
+        try:
+            bilateral = cv2.bilateralFilter(gray, 9, 80, 80)
+            edges = cv2.Canny(bilateral, 20, 60)
+            edges = cv2.bitwise_and(edges, edges, mask=mask)
+            
+            # Connect hair strands
+            kernel_line_h = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 1))
+            kernel_line_v = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (1, 3))
+            edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel_line_h)
+            edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel_line_v)
+            
+            if np.sum(edges) > 15:
+                methods_results['edge_method'] = {
+                    'mask': edges,
+                    'name': 'Hair Edge Detection',
+                    'pixel_count': np.sum(edges),
+                    'description': 'Canny edges + strand connection',
+                    'quality_score': self.calculate_method_quality(edges, gray, mask),
+                    'success': True
+                }
+            else:
+                methods_results['edge_method'] = {'success': False, 'reason': 'No significant edges detected'}
+        except Exception as e:
+            methods_results['edge_method'] = {'success': False, 'reason': f'Edge error: {e}'}
+        
+        # 🎯 METHOD 4: GABOR FILTER BANK
+        try:
+            gabor_response = np.zeros_like(gray, dtype=np.float32)
+            hair_angles = [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165]
+            
+            for angle in hair_angles:
+                theta = np.radians(angle)
+                kernel = cv2.getGaborKernel((11, 11), 3, theta, 6, 0.5, 0, ktype=cv2.CV_32F)
+                filtered = cv2.filter2D(gray, cv2.CV_32F, kernel)
+                gabor_response += np.abs(filtered)
+            
+            gabor_response = cv2.normalize(gabor_response, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8) # type: ignore
+            gabor_threshold = np.percentile(gabor_response[mask > 0], 70) if np.sum(mask) > 0 else 50
+            gabor_mask = np.zeros_like(mask)
+            gabor_mask[(gabor_response > gabor_threshold) & (mask > 0)] = 255
+            
+            if np.sum(gabor_mask) > 20:
+                methods_results['gabor_method'] = {
+                    'mask': gabor_mask,
+                    'name': 'Gabor Hair Texture',
+                    'pixel_count': np.sum(gabor_mask),
+                    'description': f'12-direction Gabor bank>{gabor_threshold}',
+                    'quality_score': self.calculate_method_quality(gabor_mask, gray, mask),
+                    'response_image': gabor_response,
+                    'success': True
+                }
+            else:
+                methods_results['gabor_method'] = {'success': False, 'reason': 'Gabor filters detected insufficient texture'}
+        except Exception as e:
+            methods_results['gabor_method'] = {'success': False, 'reason': f'Gabor error: {e}'}
+        
+        # 🎯 METHOD 5: TEXTURE VARIANCE
+        try:
+            kernel_size = 5
+            kernel = np.ones((kernel_size, kernel_size), np.float32) / (kernel_size * kernel_size)
+            
+            gray_float = gray.astype(np.float32)
+            mean_img = cv2.filter2D(gray_float, -1, kernel)
+            sqr_mean_img = cv2.filter2D(gray_float * gray_float, -1, kernel)
+            variance = np.maximum(0.0, sqr_mean_img - mean_img * mean_img)
+            
+            variance_norm = cv2.normalize(variance, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8) # type: ignore
+            texture_threshold = np.percentile(variance_norm[mask > 0], 60) if np.sum(mask) > 0 else 50
+            texture_mask = np.zeros_like(mask)
+            texture_mask[(variance_norm > texture_threshold) & (mask > 0)] = 255
+            
+            if np.sum(texture_mask) > 20:
+                methods_results['texture_method'] = {
+                    'mask': texture_mask,
+                    'name': 'Texture Variance',
+                    'pixel_count': np.sum(texture_mask),
+                    'description': f'Local variance>{texture_threshold}',
+                    'quality_score': self.calculate_method_quality(texture_mask, gray, mask),
+                    'success': True
+                }
+            else:
+                methods_results['texture_method'] = {'success': False, 'reason': 'Insufficient texture variation'}
+        except Exception as e:
+            methods_results['texture_method'] = {'success': False, 'reason': f'Texture error: {e}'}
+        
+        # 🎯 METHOD 6: MORPHOLOGICAL TOP-HAT
+        try:
+            kernel_tophat = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            tophat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel_tophat)
+            tophat_threshold = np.percentile(tophat[mask > 0], 75) if np.sum(mask) > 0 else 20 # type: ignore
+            tophat_mask = np.zeros_like(mask)
+            tophat_mask[(tophat > tophat_threshold) & (mask > 0)] = 255
+            
+            if np.sum(tophat_mask) > 15:
+                methods_results['tophat_method'] = {
+                    'mask': tophat_mask,
+                    'name': 'Dark Hair Strands',
+                    'pixel_count': np.sum(tophat_mask),
+                    'description': f'Black top-hat>{tophat_threshold}',
+                    'quality_score': self.calculate_method_quality(tophat_mask, gray, mask),
+                    'response_image': tophat,
+                    'success': True
+                }
+            else:
+                methods_results['tophat_method'] = {'success': False, 'reason': 'No dark strands detected'}
+        except Exception as e:
+            methods_results['tophat_method'] = {'success': False, 'reason': f'Top-hat error: {e}'}
+        
+        # 🎯 FALLBACK METHOD 1: STATISTICAL OUTLIER DETECTION
+        try:
+            masked_pixels = gray[mask > 0]
+            if len(masked_pixels) > 50:
+                mean_intensity = np.mean(masked_pixels)
+                std_intensity = np.std(masked_pixels)
+                
+                outlier_threshold = mean_intensity - (1.5 * std_intensity)
+                
+                outlier_mask = np.zeros_like(mask)
+                outlier_mask[(gray < outlier_threshold) & (mask > 0)] = 255
+                
+                if np.sum(outlier_mask) > 15:
+                    methods_results['outlier_method'] = {
+                        'mask': outlier_mask,
+                        'name': 'Statistical Outliers',
+                        'pixel_count': np.sum(outlier_mask),
+                        'description': f'Pixels < mean-1.5*std ({outlier_threshold:.0f})',
+                        'quality_score': self.calculate_method_quality(outlier_mask, gray, mask),
+                        'success': True
+                    }
+                else:
+                    methods_results['outlier_method'] = {'success': False, 'reason': 'No statistical outliers found'}
+            else:
+                methods_results['outlier_method'] = {'success': False, 'reason': 'Insufficient pixels for statistics'}
+        except Exception as e:
+            methods_results['outlier_method'] = {'success': False, 'reason': f'Outlier error: {e}'}
+        
+        # 🎯 FALLBACK METHOD 2: SIMPLE PERCENTILE THRESHOLDING
+        try:
+            masked_pixels = gray[mask > 0]
+            if len(masked_pixels) > 20:
+                percentile_threshold = np.percentile(masked_pixels, 25)  # Darkest 25%
+                
+                percentile_mask = np.zeros_like(mask)
+                percentile_mask[(gray < percentile_threshold) & (mask > 0)] = 255
+                
+                if np.sum(percentile_mask) > 10:
+                    methods_results['percentile_method'] = {
+                        'mask': percentile_mask,
+                        'name': 'Darkest 25%',
+                        'pixel_count': np.sum(percentile_mask),
+                        'description': f'Bottom 25th percentile < {percentile_threshold:.0f}',
+                        'quality_score': self.calculate_method_quality(percentile_mask, gray, mask),
+                        'success': True
+                    }
+                else:
+                    methods_results['percentile_method'] = {'success': False, 'reason': 'Percentile method failed'}
+            else:
+                methods_results['percentile_method'] = {'success': False, 'reason': 'Insufficient pixels'}
+        except Exception as e:
+            methods_results['percentile_method'] = {'success': False, 'reason': f'Percentile error: {e}'}
+        
+        # 🎯 INTELLIGENT COMBINATION (only use successful methods)
+        successful_methods = {k: v for k, v in methods_results.items() if v.get('success', False)}
+        
+        if len(successful_methods) >= 1:
+            # Sort successful methods by quality
+            sorted_successful = sorted(successful_methods.items(), 
+                                     key=lambda x: x[1].get('quality_score', 0), reverse=True)
+            
+            if len(sorted_successful) == 1:
+                # Only one method worked, use it
+                best_method = sorted_successful[0]
+                combined_mask = best_method[1]['mask'].copy()
+                strategy = f"Only {best_method[1]['name']} succeeded"
+            else:
+                # Multiple methods worked, combine them intelligently
+                best_mask = sorted_successful[0][1]['mask']
+                second_mask = sorted_successful[1][1]['mask']
+                
+                # Use union but weight towards better method
+                combined_mask = cv2.bitwise_or(best_mask, second_mask)
+                strategy = f"Union of {sorted_successful[0][1]['name']} + {sorted_successful[1][1]['name']}"
+            
+            # Final cleanup
+            kernel_clean = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+            combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel_clean)
+            combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel_clean)
+            
+            methods_results['intelligent_combination'] = {
+                'mask': combined_mask,
+                'name': 'Intelligent Combination',
+                'pixel_count': np.sum(combined_mask),
+                'description': strategy,
+                'quality_score': self.calculate_method_quality(combined_mask, gray, mask),
+                'success': True
+            }
+        
+        # Report what happened
+        successful_count = sum(1 for v in methods_results.values() if v.get('success', False))
+        failed_count = len(methods_results) - successful_count
+        
+        print(f"✅ Robust analysis complete: {successful_count} succeeded, {failed_count} failed")
+        
+        return methods_results
+
+    def extract_colors_from_individual_methods(self, image, mask, methods_results, n_colors=2):
+        """
+        Extract colors from each individual method (only successful ones)
+        """
+        color_results = {}
+        
+        print("🎨 Extracting colors from successful methods...")
+        
+        for method_name, method_data in methods_results.items():
+            if not method_data.get('success', False):
+                color_results[method_name] = {
+                    'colors': None,
+                    'percentages': None,
+                    'palette': None,
+                    'status': f"Method failed: {method_data.get('reason', 'Unknown')}",
+                    'method_info': method_data
+                }
+                continue
+            
+            method_mask = method_data['mask']
+            
+            if method_mask is None or np.sum(method_mask) < 5:
+                color_results[method_name] = {
+                    'colors': None,
+                    'percentages': None,
+                    'palette': None,
+                    'status': f'Insufficient pixels: {np.sum(method_mask)}',
+                    'method_info': method_data
+                }
+                continue
+            
+            try:
+                # Extract colors using the method's mask
+                colors, percentages = self.extract_colors_from_hair_mask(image, method_mask, n_colors)
+                
+                if colors is not None:
+                    palette = self.create_color_palette_array(colors, percentages, height=60, width=300)
+                    color_results[method_name] = {
+                        'colors': colors,
+                        'percentages': percentages,
+                        'palette': palette,
+                        'status': 'Success',
+                        'method_info': method_data
+                    }
+                else:
+                    color_results[method_name] = {
+                        'colors': None,
+                        'percentages': None,
+                        'palette': None,
+                        'status': 'Color extraction failed',
+                        'method_info': method_data
+                    }
+            except Exception as e:
+                color_results[method_name] = {
+                    'colors': None,
+                    'percentages': None,
+                    'palette': None,
+                    'status': f'Error: {str(e)}',
+                    'method_info': method_data
+                }
+        
+        successful_extractions = sum(1 for result in color_results.values() if result['status'] == 'Success')
+        print(f"✅ Color extraction completed: {successful_extractions}/{len(color_results)} successful")
+        
+        return color_results
+
+    def create_color_palette_array(self, colors, percentages, height=100, width=400):
+        """Helper function to create color palette array"""
+        if colors is None or percentages is None:
+            return None
+        
+        palette = np.zeros((height, width, 3), dtype=np.uint8)
+        start_x = 0
+        for color, percentage in zip(colors, percentages):
+            width_segment = int(width * (percentage / 100))
+            end_x = min(start_x + width_segment, width)
+            if end_x > start_x:
+                palette[:, start_x:end_x] = color
+            start_x = end_x
+        return palette
+
+    def extract_robust_eyebrow_colors(self, image, mask, n_colors=3, filename=None):
+        """
+        🆕 NEW MAIN METHOD: Extract colors using all robust methods
+        
+        Args:
+            image: Input image (BGR format)
+            mask: Binary mask for the eyebrow region (from Facer segmentation)
+            n_colors: FIXED number of dominant colors to extract for each method
+            filename: Optional filename for metadata lookup
+            
+        Returns:
+            dict: Complete results including all methods, their masks, and color extractions
+        """
+        print(f"🚀 Starting robust eyebrow color analysis with {n_colors} colors per method...")
+        
+        # Run all robust methods
+        methods_results = self.extract_hair_with_robust_fallbacks(image, mask)
+        
+        # Extract colors from each successful method
+        color_results = self.extract_colors_from_individual_methods(image, mask, methods_results, n_colors)
+        
+        # Find the best method for main result
+        successful_methods = {k: v for k, v in methods_results.items() if v.get('success', False)}
+        
+        # Determine the best method for primary color analysis
+        best_method_name = None
+        best_colors = None
+        best_percentages = None
+        
+        if 'intelligent_combination' in successful_methods:
+            best_method_name = 'intelligent_combination'
+        elif successful_methods:
+            # Use the method with highest quality score
+            best_method_name = max(successful_methods.keys(), 
+                                 key=lambda x: successful_methods[x].get('quality_score', 0))
+        
+        if best_method_name and color_results[best_method_name]['status'] == 'Success':
+            best_colors = color_results[best_method_name]['colors']
+            best_percentages = color_results[best_method_name]['percentages']
+        
+        # Create comprehensive debug images from the best method
+        debug_images = {}
+        if best_method_name:
+            best_mask = methods_results[best_method_name]['mask']
+            best_colors_bgr = best_colors[:, ::-1] if best_colors is not None else None # Convert RGB to BGR for visualization
+            
+            # Create visualization of detected hair
+            if best_mask is not None:
+                hair_overlay = image.copy()
+                hair_overlay[best_mask > 0] = [0, 255, 0]  # Green overlay
+                debug_images['detected_hair_overlay'] = cv2.cvtColor(hair_overlay, cv2.COLOR_BGR2RGB)
+                
+                # Create mask visualization
+                debug_images['final_hair_mask'] = cv2.cvtColor(best_mask, cv2.COLOR_GRAY2RGB)
+                
+                # Create color palette
+                if best_colors is not None:
+                    palette = self.create_color_palette_array(best_colors, best_percentages, height=80, width=400)
+                    debug_images['color_palette'] = palette
+        
+        return {
+            'primary_colors': best_colors,
+            'primary_percentages': best_percentages,
+            'best_method': best_method_name,
+            'methods_results': methods_results,
+            'color_results': color_results,
+            'debug_images': debug_images,
+            'summary': {
+                'total_methods': len(methods_results),
+                'successful_methods': len(successful_methods),
+                'successful_color_extractions': sum(1 for r in color_results.values() if r['status'] == 'Success')
+            }
+        }
+
+    # Keep all existing methods for backward compatibility
     def extract_eyebrow_hair_pixels_only(self, image, mask, debug=True):
         """
         ORIGINAL method - keeping it exactly as it was working!
         ENHANCED method to extract ONLY eyebrow hair pixels, with improved black hair detection.
-        Includes LBP and Gabor filter visualizations for debugging purposes.
-
-        Args:
-            image: Input image (BGR format)
-            mask: Binary mask for the eyebrow region from Facer segmentation
-            debug: Whether to return debug images
-
-        Returns:
-            hair_mask: Binary mask containing only hair pixels (LAB-based final result)
-            debug_images: Dictionary of debug images showing the process
         """
         debug_images = {}
 
