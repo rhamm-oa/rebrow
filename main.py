@@ -707,7 +707,7 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                     if method_info['left_colors'] is not None:
                         for i, (color, pct) in enumerate(zip(method_info['left_colors'], method_info['left_percentages'])):
                             color_bgr = color[::-1]
-                            color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0]
+                            color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0] # type: ignore
                             st.text(f"C{i+1}({pct:.0f}%): L{color_lab[0]} a{color_lab[1]} b{color_lab[2]}")
                 else:
                     st.write(f"Colors: {method_info['left_color_status']}")
@@ -767,7 +767,7 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                     if method_info['right_colors'] is not None:
                         for i, (color, pct) in enumerate(zip(method_info['right_colors'], method_info['right_percentages'])):
                             color_bgr = color[::-1]
-                            color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0]
+                            color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0] # type: ignore
                             st.text(f"C{i+1}({pct:.0f}%): L{color_lab[0]} a{color_lab[1]} b{color_lab[2]}")
                 else:
                     st.write(f"Colors: {method_info['right_color_status']}")
