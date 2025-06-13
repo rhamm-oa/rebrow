@@ -500,12 +500,12 @@ class ColorAnalysis:
         best_colors = None
         best_percentages = None
         
-        if 'intelligent_combination' in successful_methods:
-            best_method_name = 'intelligent_combination'
-        elif successful_methods:
-            # Use the method with highest quality score
+        if successful_methods:
+            # Use the method with highest quality score (including intelligent_combination)
             best_method_name = max(successful_methods.keys(), 
-                                 key=lambda x: successful_methods[x].get('quality_score', 0))
+                                key=lambda x: successful_methods[x].get('quality_score', 0))
+        else:
+            best_method_name = None
         
         if best_method_name and color_results[best_method_name]['status'] == 'Success':
             best_colors = color_results[best_method_name]['colors']
