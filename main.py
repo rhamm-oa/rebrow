@@ -1,28 +1,30 @@
-import streamlit as st
-import cv2
-import numpy as np
-import os
-from PIL import Image
-import io
-import json
 import plotly.graph_objects as go
-import plotly.express as px
-import random
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
+import plotly.express as px
+import streamlit as st
+import numpy as np
+import random
+import json
+import cv2
+import os
+import io
 
-# Set random seeds for reproducibility
+from matplotlib.backends.backend_pdf import PdfPages
+from PIL import Image
+
+
 random.seed(42)
 np.random.seed(42)
 
 # Import custom modules
-from face_detection import FaceDetector
 from eyebrow_segmentation import EyebrowSegmentation
+from facer_segmentation import FacerSegmentation
+from eyebrow_statistics import EyebrowStatistics
 from color_analysis import ColorAnalysis
 from shape_analysis import ShapeAnalysis
-from facer_segmentation import FacerSegmentation
-from eyebrow_recoloring import EyebrowRecoloring
-from eyebrow_statistics import EyebrowStatistics
+from face_detection import FaceDetector
+
+
 
 # Set page config
 st.set_page_config(
@@ -30,6 +32,13 @@ st.set_page_config(
     page_icon="👁️",
     layout="wide"
 )
+
+# Add this to your sidebar in main.py
+if st.sidebar.button("🔄 Clear Cache & Restart Analysis"):
+    st.cache_resource.clear()
+    if 'cached_results' in st.session_state:
+        del st.session_state.cached_results
+    st.rerun()
 
 # App title and description
 st.title("🔬 Advanced Eyebrow Analysis App")
@@ -40,6 +49,24 @@ This app analyzes eyebrows in facial images using **multiple robust detection me
 - 🔬 Detailed debugging and method comparison
 - 📊 Comprehensive visualization of results
 """)
+
+
+def convert_rgb_to_lab_proper(rgb_color):
+    """Convert RGB to proper LAB values with correct scaling"""
+    from colormath.color_objects import sRGBColor, LabColor
+    from colormath.color_conversions import convert_color
+    
+    r, g, b = rgb_color
+    rgb_color_obj = sRGBColor(r/255.0, g/255.0, b/255.0)
+    lab_color_obj = convert_color(rgb_color_obj, LabColor)
+    
+    return {
+        'L': round(lab_color_obj.lab_l, 1), # type: ignore
+        'a': round(lab_color_obj.lab_a, 1),  # type: ignore
+        'b': round(lab_color_obj.lab_b, 1) # type: ignore
+    }
+
+
 
 # Initialize modules with metadata support
 @st.cache_resource
@@ -75,6 +102,39 @@ color_analyzer = modules['color_analyzer']
 shape_analyzer = modules['shape_analyzer']
 facer_segmenter = modules['facer_segmenter']
 eyebrow_stats = modules['eyebrow_stats']
+
+def create_proper_mask_overlay(original_region, detection_mask, reference_mask):
+    """Create overlay showing original eyebrow (blue) and detection (green) like in earlier screenshots"""
+    if original_region is None or detection_mask is None:
+        return None
+    
+    try:
+        # Create overlay image
+        overlay = original_region.copy()
+        
+        # Show original eyebrow region in blue (if reference mask is available and same size)
+        if reference_mask is not None:
+            # Crop reference mask to same region
+            cropped_reference = extract_eyebrow_region(reference_mask, reference_mask)
+            if (cropped_reference is not None and 
+                cropped_reference.shape[:2] == original_region.shape[:2]):
+                # Blue overlay for original eyebrow region
+                blue_overlay = np.zeros_like(original_region)
+                blue_overlay[cropped_reference > 0] = [0, 0, 255]  # Blue
+                overlay = cv2.addWeighted(overlay, 0.7, blue_overlay, 0.3, 0)
+        
+        # Show detected pixels in green
+        green_overlay = np.zeros_like(original_region)
+        green_overlay[detection_mask > 0] = [0, 255, 0]  # Green
+        overlay = cv2.addWeighted(overlay, 0.7, green_overlay, 0.3, 0)
+        
+        return overlay
+        
+    except Exception as e:
+        print(f"Error creating proper overlay: {e}")
+        # Fallback to simple overlay
+        return cv2.addWeighted(original_region, 0.7, 
+                              cv2.cvtColor(detection_mask, cv2.COLOR_GRAY2RGB), 0.3, 0)
 
 # Function to convert OpenCV image to PIL Image
 def cv2_to_pil(cv2_img):
@@ -148,6 +208,18 @@ def display_robust_analysis_results(robust_results, side_name):
     
     st.subheader(f"🔬 {side_name} Eyebrow - Robust Analysis Results")
     
+    # 🆕 Display Facer segmentation first (if available)
+    if results and results.get('using_facer_masks', False):
+        facer_result = results.get('facer_result')
+        if facer_result and facer_result.get('success', False):
+            st.success("✅ Using Facer segmentation masks for accurate detection")
+            
+            # Display Facer visualization
+            vis_img = facer_result.get('visualization_image')
+            if vis_img is not None:
+                vis_img_rgb = cv2.cvtColor(vis_img, cv2.COLOR_BGR2RGB)
+                st.image(vis_img_rgb, caption="Facer Segmentation Results", use_container_width=True)
+
     # Display summary
     summary = robust_results.get('summary', {})
     
@@ -167,26 +239,41 @@ def display_robust_analysis_results(robust_results, side_name):
         debug_images = robust_results.get('debug_images', {})
         palette = debug_images.get('color_palette')
         if palette is not None:
-            st.image(palette, caption="Extracted Color Palette", width=400)
+            st.image(palette, caption="Extracted Color Palette", use_container_width=True)
         
         # Show color information
         primary_colors = robust_results['primary_colors']
         primary_percentages = robust_results['primary_percentages']
         
-        color_info = color_analyzer.get_color_info(primary_colors, primary_percentages)
-        
-        # Display color table
-        for i, info in enumerate(color_info):
-            with st.expander(f"Color {i+1}: {info['hex']} ({info['percentage']})"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write(f"**RGB:** {info['rgb']}")
-                    st.write(f"**HEX:** {info['hex']}")
-                    st.write(f"**LAB:** L:{info['lab'][0]} a:{info['lab'][1]} b:{info['lab'][2]}")
-                with col2:
-                    st.write(f"**LCH:** L:{info['lch'][0]} C:{info['lch'][1]} H:{info['lch'][2]}")
-                    st.write(f"**HSV:** H:{info['hsv'][0]} S:{info['hsv'][1]} V:{info['hsv'][2]}")
-                    st.write(f"**Percentage:** {info['percentage']}")
+        if primary_colors is not None and primary_percentages is not None:
+            st.subheader("📊 Detected Hair Colors")
+            for i, (color, pct) in enumerate(zip(primary_colors, primary_percentages)):
+                detail_col_1, detail_col_2 = st.columns([1, 3])
+                with detail_col_1:
+                    hex_color = f'#{color[0]:02x}{color[1]:02x}{color[2]:02x}'
+                    st.markdown(f"<div style='background-color: {hex_color}; width: 100%; height: 80px; border-radius: 5px; border: 2px solid #333;'></div>", unsafe_allow_html=True)
+                with detail_col_2:
+                    # Use proper LAB conversion
+                    lab_values = convert_rgb_to_lab_proper(color)
+                    st.write(f"**Hair Color {i+1}**: {pct:.1f}%")
+                    st.write(f"🎨 RGB: {tuple(color)}")
+                    st.write(f"🏷️ HEX: {hex_color}")
+                    st.write(f"🔬 LAB: L:{lab_values['L']} a:{lab_values['a']} b:{lab_values['b']}")
+                st.markdown("---")
+            
+            # 🆕 Add Interactive visualizations (3D plots)
+            st.subheader("📈 Interactive Visualizations")
+            
+            # Pie chart
+            plotly_pie = color_analyzer.create_plotly_pie_chart(primary_colors, primary_percentages)
+            if plotly_pie is not None:
+                st.plotly_chart(go.Figure(json.loads(plotly_pie)), use_container_width=True)
+
+            # 3D LAB visualization
+            plotly_lab_3d = color_analyzer.create_plotly_lab_3d(primary_colors, primary_percentages)
+            if plotly_lab_3d is not None:
+                st.plotly_chart(go.Figure(json.loads(plotly_lab_3d)), use_container_width=True)        
+
 
 def display_method_selector_and_results(left_robust_results, right_robust_results):
     """
@@ -297,7 +384,6 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
         if 'mask' in left_method_data and left_method_data['mask'] is not None:
             mask = left_method_data['mask']
             mask_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
-            
             # Show mask statistics
             total_pixels = np.sum(mask > 0)
             mask_shape = mask.shape
@@ -532,7 +618,7 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
     st.subheader("Original Face Crop")
     if face_crop is not None:
         face_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-        st.image(face_rgb, caption="Face Crop", width=400)
+        st.image(face_rgb, caption="Face Crop", width=500)
     
     # Show analysis summary
     left_successful = sum(1 for method in comparison_data if method['left_success'])
@@ -662,31 +748,59 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                         
                         # Show original eyebrow region
                         st.write("**📷 Original Eyebrow Region:**")
-                        st.image(original_left_rgb, caption="Original Left Eyebrow", width=mask_zoom//2)
+                        st.image(original_left_rgb, caption="Original Left Eyebrow", width=400)
                 
-                # Show detection mask
+                # Show detection mask - CROP IT TO THE SAME REGION
                 if method_info['left_mask'] is not None and method_info['left_success']:
-                    mask_rgb = cv2.cvtColor(method_info['left_mask'], cv2.COLOR_GRAY2RGB)
                     
-                    # Extract detected region for better visualization
-                    detected_region = extract_eyebrow_region_with_mask(face_crop, method_info['left_mask'])
-                    
-                    st.write(f"**🎯 Detection Mask ({method_info['display_name']}):**")
-                    st.image(mask_rgb, caption=f"Left Detection Mask", width=mask_zoom)
-                    
-                    # Show overlay if requested
-                    if show_overlay and face_crop is not None:
-                        overlay_img = create_mask_overlay(face_crop, method_info['left_mask'], left_eyebrow_mask)
-                        if overlay_img is not None:
-                            st.write("**🔍 Overlay: Original + Detection:**")
-                            overlay_rgb = cv2.cvtColor(overlay_img, cv2.COLOR_BGR2RGB)
-                            st.image(overlay_rgb, caption="Original (blue) + Detection (green)", width=mask_zoom)
-                    
-                    # Show statistics
-                    mask_stats = analyze_mask_statistics(method_info['left_mask'], left_eyebrow_mask if left_eyebrow_mask is not None else method_info['left_mask'])
-                    st.write("**📊 Detection Statistics:**")
-                    for key, value in mask_stats.items():
-                        st.write(f"- {key}: {value}")
+                    # 🔧 FIX: Extract the same region from detection mask as the original
+                    if left_eyebrow_mask is not None:
+                        # Crop the detection mask to the same region as original
+                        cropped_detection_mask = extract_eyebrow_region(method_info['left_mask'], left_eyebrow_mask)
+                        
+                        if cropped_detection_mask is not None:
+                            # Resize to match original dimensions if needed
+                            if 'original_left_rgb' in locals():
+                                target_height, target_width = original_left_rgb.shape[:2]
+                                if cropped_detection_mask.shape[:2] != (target_height, target_width):
+                                    cropped_detection_mask = cv2.resize(
+                                        cropped_detection_mask, 
+                                        (target_width, target_height), 
+                                        interpolation=cv2.INTER_NEAREST
+                                    )
+                            
+                            # Convert to RGB for display
+                            mask_rgb = cv2.cvtColor(cropped_detection_mask, cv2.COLOR_GRAY2RGB)
+                            
+                            st.write(f"**🎯 Detection Mask ({method_info['display_name']}):**")
+                            st.image(mask_rgb, caption=f"Left Detection Mask", width=400)
+                            
+                            # 🔧 FIX: Create proper overlay with blue/green colors like earlier
+                            if show_overlay and 'original_left_rgb' in locals():
+                                overlay_img = create_proper_mask_overlay(original_left_rgb, cropped_detection_mask, left_eyebrow_mask)
+                                if overlay_img is not None:
+                                    st.write("**🔍 Overlay: Original + Detection:**")
+                                    st.image(overlay_img, caption="Original (blue) + Detection (green)", width=400)
+                            
+                            # Show statistics
+                            mask_stats = analyze_mask_statistics(cropped_detection_mask, None)
+                            st.write("**📊 Detection Statistics:**")
+                            for key, value in mask_stats.items():
+                                st.write(f"- {key}: {value}")
+                            
+                        else:
+                            st.error("Could not crop detection mask to eyebrow region")
+                            mask_stats = analyze_mask_statistics(method_info['left_mask'], None)
+                    else:
+                        # Fallback: show full detection mask if no eyebrow mask available
+                        mask_rgb = cv2.cvtColor(method_info['left_mask'], cv2.COLOR_GRAY2RGB)
+                        st.write(f"**🎯 Detection Mask ({method_info['display_name']}) - Full Face:**")
+                        st.image(mask_rgb, caption=f"Left Detection Mask (Full)", width=400)
+                        mask_stats = analyze_mask_statistics(method_info['left_mask'], None)
+                        
+                        st.write("**📊 Detection Statistics:**")
+                        for key, value in mask_stats.items():
+                            st.write(f"- {key}: {value}")
                         
                 else:
                     st.error("❌ No detection mask available")
@@ -696,9 +810,9 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                         if original_left_region is not None:
                             original_left_rgb = cv2.cvtColor(original_left_region, cv2.COLOR_BGR2RGB)
                             st.write("**📷 Original Eyebrow Region (for reference):**")
-                            st.image(original_left_rgb, caption="Original Left Eyebrow", width=mask_zoom//2)
+                            st.image(original_left_rgb, caption="Original Left Eyebrow", width=400)
                 
-                # Left colors
+                # 🔧 ADD: Left colors section (this was missing!)
                 st.markdown("#### 🎨 Left Colors")
                 if method_info['left_color_status'] == 'Success' and method_info['left_palette'] is not None:
                     st.image(method_info['left_palette'], caption="Left Colors", width=400)
@@ -725,28 +839,59 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                         
                         # Show original eyebrow region
                         st.write("**📷 Original Eyebrow Region:**")
-                        st.image(original_right_rgb, caption="Original Right Eyebrow", width=mask_zoom//2)
+                        st.image(original_right_rgb, caption="Original Right Eyebrow", width=400)
                 
-                # Show detection mask
+                # Show detection mask - CROP IT TO THE SAME REGION
                 if method_info['right_mask'] is not None and method_info['right_success']:
-                    mask_rgb = cv2.cvtColor(method_info['right_mask'], cv2.COLOR_GRAY2RGB)
                     
-                    st.write(f"**🎯 Detection Mask ({method_info['display_name']}):**")
-                    st.image(mask_rgb, caption=f"Right Detection Mask", width=mask_zoom)
-                    
-                    # Show overlay if requested
-                    if show_overlay and face_crop is not None:
-                        overlay_img = create_mask_overlay(face_crop, method_info['right_mask'], right_eyebrow_mask)
-                        if overlay_img is not None:
-                            st.write("**🔍 Overlay: Original + Detection:**")
-                            overlay_rgb = cv2.cvtColor(overlay_img, cv2.COLOR_BGR2RGB)
-                            st.image(overlay_rgb, caption="Original (blue) + Detection (green)", width=mask_zoom)
-                    
-                    # Show statistics
-                    mask_stats = analyze_mask_statistics(method_info['right_mask'], right_eyebrow_mask if right_eyebrow_mask is not None else method_info['right_mask'])
-                    st.write("**📊 Detection Statistics:**")
-                    for key, value in mask_stats.items():
-                        st.write(f"- {key}: {value}")
+                    # 🔧 FIX: Extract the same region from detection mask as the original
+                    if right_eyebrow_mask is not None:
+                        # Crop the detection mask to the same region as original
+                        cropped_detection_mask = extract_eyebrow_region(method_info['right_mask'], right_eyebrow_mask)
+                        
+                        if cropped_detection_mask is not None:
+                            # Resize to match original dimensions if needed
+                            if 'original_right_rgb' in locals():
+                                target_height, target_width = original_right_rgb.shape[:2]
+                                if cropped_detection_mask.shape[:2] != (target_height, target_width):
+                                    cropped_detection_mask = cv2.resize(
+                                        cropped_detection_mask, 
+                                        (target_width, target_height), 
+                                        interpolation=cv2.INTER_NEAREST
+                                    )
+                            
+                            # Convert to RGB for display
+                            mask_rgb = cv2.cvtColor(cropped_detection_mask, cv2.COLOR_GRAY2RGB)
+                            
+                            st.write(f"**🎯 Detection Mask ({method_info['display_name']}):**")
+                            st.image(mask_rgb, caption=f"Right Detection Mask", width=400)
+                            
+                            # 🔧 FIX: Create proper overlay with blue/green colors like earlier
+                            if show_overlay and 'original_right_rgb' in locals():
+                                overlay_img = create_proper_mask_overlay(original_right_rgb, cropped_detection_mask, right_eyebrow_mask)
+                                if overlay_img is not None:
+                                    st.write("**🔍 Overlay: Original + Detection:**")
+                                    st.image(overlay_img, caption="Original (blue) + Detection (green)", width=400)
+
+                            # Show statistics
+                            mask_stats = analyze_mask_statistics(cropped_detection_mask, None)
+                            st.write("**📊 Detection Statistics:**")
+                            for key, value in mask_stats.items():
+                                st.write(f"- {key}: {value}")
+                            
+                        else:
+                            st.error("Could not crop detection mask to eyebrow region")
+                            mask_stats = analyze_mask_statistics(method_info['right_mask'], None)
+                    else:
+                        # Fallback: show full detection mask if no eyebrow mask available
+                        mask_rgb = cv2.cvtColor(method_info['right_mask'], cv2.COLOR_GRAY2RGB)
+                        st.write(f"**🎯 Detection Mask ({method_info['display_name']}) - Full Face:**")
+                        st.image(mask_rgb, caption=f"Right Detection Mask (Full)", width=400)
+                        mask_stats = analyze_mask_statistics(method_info['right_mask'], None)
+                        
+                        st.write("**📊 Detection Statistics:**")
+                        for key, value in mask_stats.items():
+                            st.write(f"- {key}: {value}")
                         
                 else:
                     st.error("❌ No detection mask available")
@@ -756,7 +901,7 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                         if original_right_region is not None:
                             original_right_rgb = cv2.cvtColor(original_right_region, cv2.COLOR_BGR2RGB)
                             st.write("**📷 Original Eyebrow Region (for reference):**")
-                            st.image(original_right_rgb, caption="Original Right Eyebrow", width=mask_zoom//2)
+                            st.image(original_right_rgb, caption="Original Right Eyebrow", width=400)
                 
                 # Right colors
                 st.markdown("#### 🎨 Right Colors")
@@ -1147,11 +1292,10 @@ if uploaded_file is not None:
     
     if results:
         # Create tabs for different analyses - 🆕 RESTORED Statistics tab
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "Overview", 
             "Shape Analysis", 
             "🆕 Robust Color Analysis", 
-            "Legacy Color Analysis",
             "Statistics",  # 🆕 RESTORED
             "🔬 Advanced Debugging"
         ])
@@ -1274,114 +1418,9 @@ if uploaded_file is not None:
             else:
                 st.error("❌ Robust analysis results not available")
 
-        with tab4:
-            # Legacy Color Analysis tab (keep existing functionality)
-            st.header("Legacy Color Analysis (Single Method)")
-            
-            # Check if we have Facer results
-            using_facer = results.get('using_facer_masks', False)
-            facer_result = results.get('facer_result')
-            
-            if using_facer and facer_result and facer_result.get('success', False):
-                st.success("✅ Using Facer segmentation masks for accurate color analysis")
-                
-                # Display Facer visualization
-                vis_img = facer_result.get('visualization_image')
-                if vis_img is not None:
-                    vis_img_rgb = cv2.cvtColor(vis_img, cv2.COLOR_BGR2RGB)
-                    st.image(vis_img_rgb, caption="Facer Segmentation Results", use_container_width=True)
-                
-                # Enhanced Color Analysis Section with metadata awareness
-                st.subheader("🎨 Legacy Hair-Only Color Analysis")
-                
-                color_col1, color_col2 = st.columns(2)
-                
-                # Left Eyebrow Enhanced Analysis
-                with color_col1:
-                    st.subheader("👈 Left Eyebrow Analysis")
-                    
-                    # Get the analysis results
-                    left_colors = results.get('left_colors')
-                    left_percentages = results.get('left_percentages') 
-                    
-                    if left_colors is not None and left_percentages is not None:
-                        # Display color palette
-                        left_palette = results.get('left_palette')
-                        if left_palette is not None:
-                            st.image(left_palette, channels="RGB", caption="🎨 Pure Hair Colors (No Skin Tones)", use_container_width=True)
-                        
-                        # Color information
-                        left_color_info = results.get('left_color_info', [])
-                        if left_color_info:
-                            st.subheader("📊 Detected Hair Colors")
-                            for i, color_info in enumerate(left_color_info):
-                                detail_col_l1, detail_col_l2 = st.columns([1, 3])
-                                with detail_col_l1:
-                                    st.markdown(f"<div style='background-color: {color_info['hex']}; width: 100%; height: 80px; border-radius: 5px; border: 2px solid #333;'></div>", unsafe_allow_html=True)
-                                with detail_col_l2:
-                                    st.write(f"**Hair Color {i+1}**: {color_info['percentage']}")
-                                    st.write(f"🎨 RGB: {color_info['rgb']}")
-                                    st.write(f"🏷️ HEX: {color_info['hex']}")
-                                    st.write(f"🔬 LAB: {color_info['lab']}")
-                                st.markdown("---")
-                        
-                        # Interactive visualizations
-                        st.subheader("📈 Interactive Visualizations")
-                        left_plotly_pie = color_analyzer.create_plotly_pie_chart(left_colors, left_percentages)
-                        if left_plotly_pie is not None:
-                            st.plotly_chart(go.Figure(json.loads(left_plotly_pie)), use_container_width=True)
-
-                        left_plotly_lab_3d = color_analyzer.create_plotly_lab_3d(left_colors, left_percentages)
-                        if left_plotly_lab_3d is not None:
-                            st.plotly_chart(go.Figure(json.loads(left_plotly_lab_3d)), use_container_width=True)
-                    else:
-                        st.warning("⚠️ Could not extract hair colors from left eyebrow")
-                
-                # Right Eyebrow Enhanced Analysis  
-                with color_col2:
-                    st.subheader("👉 Right Eyebrow Analysis")
-                    
-                    # Get the analysis results
-                    right_colors = results.get('right_colors')
-                    right_percentages = results.get('right_percentages')
-                    
-                    if right_colors is not None and right_percentages is not None:
-                        # Display color palette
-                        right_palette = results.get('right_palette')
-                        if right_palette is not None:
-                            st.image(right_palette, channels="RGB", caption="🎨 Pure Hair Colors (No Skin Tones)", use_container_width=True)
-                        
-                        # Color information
-                        right_color_info = results.get('right_color_info', [])
-                        if right_color_info:
-                            st.subheader("📊 Detected Hair Colors")
-                            for i, color_info in enumerate(right_color_info):
-                                detail_col_r1, detail_col_r2 = st.columns([1, 3])
-                                with detail_col_r1:
-                                    st.markdown(f"<div style='background-color: {color_info['hex']}; width: 100%; height: 80px; border-radius: 5px; border: 2px solid #333;'></div>", unsafe_allow_html=True)
-                                with detail_col_r2:
-                                    st.write(f"**Hair Color {i+1}**: {color_info['percentage']}")
-                                    st.write(f"🎨 RGB: {color_info['rgb']}")
-                                    st.write(f"🏷️ HEX: {color_info['hex']}")
-                                    st.write(f"🔬 LAB: {color_info['lab']}")
-                                st.markdown("---")
-                        
-                        # Interactive visualizations
-                        st.subheader("📈 Interactive Visualizations")
-                        right_plotly_pie = color_analyzer.create_plotly_pie_chart(right_colors, right_percentages)
-                        if right_plotly_pie is not None:
-                            st.plotly_chart(go.Figure(json.loads(right_plotly_pie)), use_container_width=True)
-
-                        right_plotly_lab_3d = color_analyzer.create_plotly_lab_3d(right_colors, right_percentages)
-                        if right_plotly_lab_3d is not None:
-                            st.plotly_chart(go.Figure(json.loads(right_plotly_lab_3d)), use_container_width=True)
-                    else:
-                        st.warning("⚠️ Could not extract hair colors from right eyebrow")
-            else:
-                st.error("❌ Facer segmentation failed. Cannot perform color analysis.")
 
         # 🆕 RESTORED Statistics Tab
-        with tab5:
+        with tab4:
             st.header("Eyebrow Color Statistics")
             st.write("Analysis of eyebrow colors across the dataset")
             
@@ -1469,7 +1508,7 @@ if uploaded_file is not None:
                                 labels={'Avg %': 'Average Percentage', 'Color': 'Dominant Color Number'})
                     st.plotly_chart(fig, use_container_width=True)
 
-        with tab6:
+        with tab5:
             # 🆕 Advanced Debugging Tab (REMOVED legacy debugging section)
             st.header("🔬 Advanced Debugging & Method Comparison")
             
@@ -1490,9 +1529,7 @@ if uploaded_file is not None:
             if left_robust_results and right_robust_results:
                 # Display debugging grid with enlarged masks and quality explanation
                 display_debugging_grid(left_robust_results, right_robust_results, face_crop)
-                
-                # 🗑️ REMOVED: Legacy Single-Method Debugging section
-                # (This was the section you wanted removed)
+
                 
             else:
                 st.error("❌ Advanced debugging not available - robust analysis failed")
