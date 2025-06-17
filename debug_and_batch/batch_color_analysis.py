@@ -9,9 +9,9 @@ import gc
 import random
 
 # Import custom modules
-from face_detection import FaceDetector
-from color_analysis import ColorAnalysis
-from facer_segmentation import FacerSegmentation
+from rebrow_modules.face_detection import FaceDetector
+from rebrow_modules.color_analysis import ColorAnalysis
+from rebrow_modules.facer_segmentation import FacerSegmentation
 
 def process_image(image_path, face_detector, color_analyzer, facer_segmenter):
     """Process a single image and extract dominant colors in LAB format"""

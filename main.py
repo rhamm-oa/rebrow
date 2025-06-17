@@ -17,12 +17,12 @@ random.seed(42)
 np.random.seed(42)
 
 # Import custom modules
-from eyebrow_segmentation import EyebrowSegmentation
-from facer_segmentation import FacerSegmentation
-from eyebrow_statistics import EyebrowStatistics
-from color_analysis import ColorAnalysis
-from shape_analysis import ShapeAnalysis
-from face_detection import FaceDetector
+from rebrow_modules.eyebrow_segmentation import EyebrowSegmentation
+from rebrow_modules.facer_segmentation import FacerSegmentation
+from rebrow_modules.eyebrow_statistics import EyebrowStatistics
+from rebrow_modules.color_analysis import ColorAnalysis
+from rebrow_modules.shape_analysis import ShapeAnalysis
+from rebrow_modules.face_detection import FaceDetector
 
 
 

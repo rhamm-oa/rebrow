@@ -19,10 +19,10 @@ from skimage.feature import local_binary_pattern
 from scipy import ndimage
 
 # Import your existing modules
-from face_detection import FaceDetector
-from eyebrow_segmentation import EyebrowSegmentation
-from color_analysis import ColorAnalysis
-from facer_segmentation import FacerSegmentation
+from rebrow_modules.face_detection import FaceDetector
+from rebrow_modules.eyebrow_segmentation import EyebrowSegmentation
+from rebrow_modules.color_analysis import ColorAnalysis
+from rebrow_modules.facer_segmentation import FacerSegmentation
 
 def load_image(image_path):
     """Load image from path"""

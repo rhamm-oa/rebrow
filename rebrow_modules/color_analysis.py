@@ -21,7 +21,7 @@ from scipy import ndimage
 
 # Import metadata handler
 try:
-    from metadata_handler import MetadataHandler
+    from utils.metadata_handler import MetadataHandler
     METADATA_AVAILABLE = True
 except ImportError:
     METADATA_AVAILABLE = False
