@@ -464,9 +464,11 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
                     for i, (color, pct) in enumerate(zip(colors, percentages)):
                         # Convert to LAB for display
                         lab_values = convert_rgb_to_lab_proper(color)
-                        st.write(f"**Color {i+1}:** RGB{tuple(color)} ({pct:.1f}%)")
-                        st.write(f"LAB: L{lab_values['L']} a{lab_values['a']} b{lab_values['b']}")
-                        st.write(f"HEX: #{color[0]:02x}{color[1]:02x}{color[2]:02x}")
+                        st.write(f"**Hair Color {i+1}**: {pct:.1f}%")
+                        st.write(f"🎨 RGB: {tuple(color)}")
+                        st.write(f"🏷️ HEX: #{color[0]:02x}{color[1]:02x}{color[2]:02x}")
+                        st.write(f"🔬 LAB: L:{lab_values['L']} a:{lab_values['a']} b:{lab_values['b']}")
+                        st.markdown("---")
             else:
                 st.error(f"❌ Color extraction failed: {left_color_data.get('status', 'Unknown error')}")
         else:
@@ -562,9 +564,11 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
                     for i, (color, pct) in enumerate(zip(colors, percentages)):
                         # Convert to LAB for display
                         lab_values = convert_rgb_to_lab_proper(color)
-                        st.write(f"**Color {i+1}:** RGB{tuple(color)} ({pct:.1f}%)")
-                        st.write(f"LAB: L{lab_values['L']} a{lab_values['a']} b{lab_values['b']}")
-                        st.write(f"HEX: #{color[0]:02x}{color[1]:02x}{color[2]:02x}")
+                        st.write(f"**Hair Color {i+1}**: {pct:.1f}%")
+                        st.write(f"🎨 RGB: {tuple(color)}")
+                        st.write(f"🏷️ HEX: #{color[0]:02x}{color[1]:02x}{color[2]:02x}")
+                        st.write(f"🔬 LAB: L:{lab_values['L']} a:{lab_values['a']} b:{lab_values['b']}")
+                        st.markdown("---")
             else:
                 st.error(f"❌ Color extraction failed: {right_color_data.get('status', 'Unknown error')}")
         else:
@@ -828,14 +832,23 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                 
                 # 🔧 ADD: Left colors section (this was missing!)
                 st.markdown("#### 🎨 Left Colors")
-                if method_info['left_color_status'] == 'Success' and method_info['left_palette'] is not None:
-                    st.image(method_info['left_palette'], caption="Left Colors", width=400)
+                if method_info['left_color_status'] == 'Success' and method_info['left_colors'] is not None:
+                    colors = method_info['left_colors']
+                    percentages = method_info['left_percentages']
                     
-                    # Show LAB values
-                    if method_info['left_colors'] is not None:
-                        for i, (color, pct) in enumerate(zip(method_info['left_colors'], method_info['left_percentages'])):
-                            lab_values = convert_rgb_to_lab_proper(color)
-                            st.text(f"C{i+1}({pct:.0f}%): L{lab_values['L']} a{lab_values['a']} b{lab_values['b']}")
+                    # Show color palette image if available
+                    if method_info['left_palette'] is not None:
+                        st.image(method_info['left_palette'], caption="Left Colors", width=400)
+                    
+                    st.write("**Detected Colors:**")
+                    for i, (color, pct) in enumerate(zip(colors, percentages)):
+                        # Convert to LAB for display
+                        lab_values = convert_rgb_to_lab_proper(color)
+                        st.write(f"**Hair Color {i+1}**: {pct:.1f}%")
+                        st.write(f"🎨 RGB: {tuple(color)}")
+                        st.write(f"🏷️ HEX: #{color[0]:02x}{color[1]:02x}{color[2]:02x}")
+                        st.write(f"🔬 LAB: L:{lab_values['L']} a:{lab_values['a']} b:{lab_values['b']}")
+                        st.markdown("---")
                 else:
                     st.write(f"Colors: {method_info['left_color_status']}")
             
@@ -916,16 +929,25 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                             st.write("**📷 Original Eyebrow Region (for reference):**")
                             st.image(original_right_rgb, caption="Original Right Eyebrow", width=400)
                 
-                # Right colors
+                # 🔧 ADD: Right colors section with color palette image display
                 st.markdown("#### 🎨 Right Colors")
-                if method_info['right_color_status'] == 'Success' and method_info['right_palette'] is not None:
-                    st.image(method_info['right_palette'], caption="Right Colors", width=400)
+                if method_info['right_color_status'] == 'Success' and method_info['right_colors'] is not None:
+                    colors = method_info['right_colors']
+                    percentages = method_info['right_percentages']
                     
-                    # Show LAB values
-                    if method_info['right_colors'] is not None:
-                        for i, (color, pct) in enumerate(zip(method_info['right_colors'], method_info['right_percentages'])):
-                            lab_values = convert_rgb_to_lab_proper(color)
-                            st.text(f"C{i+1}({pct:.0f}%): L{lab_values['L']} a{lab_values['a']} b{lab_values['b']}")
+                    # Show color palette image if available
+                    if method_info['right_palette'] is not None:
+                        st.image(method_info['right_palette'], caption="Right Colors", width=400)
+                    
+                    st.write("**Detected Colors:**")
+                    for i, (color, pct) in enumerate(zip(colors, percentages)):
+                        # Convert to LAB for display
+                        lab_values = convert_rgb_to_lab_proper(color)
+                        st.write(f"**Hair Color {i+1}**: {pct:.1f}%")
+                        st.write(f"🎨 RGB: {tuple(color)}")
+                        st.write(f"🏷️ HEX: #{color[0]:02x}{color[1]:02x}{color[2]:02x}")
+                        st.write(f"🔬 LAB: L:{lab_values['L']} a:{lab_values['a']} b:{lab_values['b']}")
+                        st.markdown("---")
                 else:
                     st.write(f"Colors: {method_info['right_color_status']}")
 
