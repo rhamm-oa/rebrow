@@ -13,10 +13,12 @@ import argparse
 import time
 import gc
 import random
-from tqdm import tqdm
 from datetime import datetime
+from tqdm import tqdm
 from colormath.color_objects import sRGBColor, LabColor
 from colormath.color_conversions import convert_color
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,7 +42,7 @@ from rebrow_modules.color_analysis import ColorAnalysis
 from rebrow_modules.facer_segmentation import FacerSegmentation
 from rebrow_modules.eyebrow_segmentation import EyebrowSegmentation
 
-def process_image(image_path, face_detector, color_analyzer, facer_segmenter, eyebrow_segmentation, k_clusters=2):
+def process_image(image_path, k_clusters=2, resize_max=800, use_gpu=False):
     """Process a single image and extract dominant colors using robust analysis"""
     try:
         # Read image
@@ -48,6 +50,17 @@ def process_image(image_path, face_detector, color_analyzer, facer_segmenter, ey
         if image is None:
             print(f"Error: Could not read image {image_path}")
             return None
+        
+        # Resize image if necessary
+        if max(image.shape[:2]) > resize_max:
+            scale = resize_max / max(image.shape[:2])
+            image = cv2.resize(image, (0, 0), fx=scale, fy=scale)
+        
+        # Create fresh module instances for each worker process to avoid GPU conflicts
+        face_detector = FaceDetector(use_gpu=use_gpu)
+        color_analyzer = ColorAnalysis()
+        facer_segmenter = FacerSegmentation(use_gpu=use_gpu)
+        eyebrow_segmentation = EyebrowSegmentation()
         
         # Detect face landmarks
         results = face_detector.detect_face(image)
@@ -168,6 +181,11 @@ def main():
     parser.add_argument('output_csv', help='Path to output CSV file')
     parser.add_argument('--k_clusters', type=int, default=2, help='Number of clusters for color extraction (default: 2)')
     parser.add_argument('--max_images', type=int, default=None, help='Maximum number of images to process (for testing)')
+    parser.add_argument('--workers', type=int, default=None, help='Number of worker processes (default: CPU count)')
+    parser.add_argument('--batch_size', type=int, default=100, help='Batch size for processing (default: 100)')
+    parser.add_argument('--resize_max', type=int, default=800, help='Resize images to max dimension for faster processing (default: 800)')
+    parser.add_argument('--skip_failed', action='store_true', help='Skip failed images and continue processing')
+    parser.add_argument('--use_gpu', action='store_true', help='Use GPU acceleration (recommended if available)')
     
     args = parser.parse_args()
     
@@ -181,12 +199,18 @@ def main():
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
-    # Initialize modules
-    print("Initializing modules...")
-    face_detector = FaceDetector(use_gpu=True)
-    color_analyzer = ColorAnalysis()
-    facer_segmenter = FacerSegmentation(use_gpu=True)
-    eyebrow_segmentation = EyebrowSegmentation()
+    # GPU handling for multiprocessing
+    if args.use_gpu:
+        print("🚀 GPU acceleration enabled!")
+        # For multiprocessing with GPU, we'll use fewer workers to avoid GPU memory conflicts
+        if args.workers is None:
+            args.workers = min(2, cpu_count())  # Limit GPU workers to prevent conflicts
+        print(f"Using {args.workers} workers with GPU acceleration")
+    else:
+        print("💻 Using CPU processing")
+        if args.workers is None:
+            args.workers = cpu_count()
+        print(f"Using {args.workers} CPU workers")
     
     # Get list of image files
     image_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif')
@@ -208,25 +232,35 @@ def main():
     print(f"Found {len(image_files)} images to process")
     print(f"Using K={args.k_clusters} clusters for color extraction")
     
-    # Process images
-    results = []
-    failed_images = []
+    # Process images in parallel
+    num_workers = args.workers
+    print(f"Using {num_workers} workers for parallel processing")
+    batch_size = args.batch_size
+    print(f"Using batch size of {batch_size} for processing")
     
-    for image_path in tqdm(image_files, desc="Processing images"): # type: ignore
-        result = process_image(image_path, face_detector, color_analyzer, facer_segmenter, eyebrow_segmentation, args.k_clusters)
-        
-        if result:
-            results.append(result)
-        else:
-            failed_images.append(os.path.basename(image_path))
+    with Pool(num_workers) as pool:
+        process_image_partial = partial(process_image, 
+                                        k_clusters=args.k_clusters, 
+                                        resize_max=args.resize_max, 
+                                        use_gpu=args.use_gpu)
+        results = []
+        for i in range(0, len(image_files), batch_size):
+            batch = image_files[i:i+batch_size]
+            batch_results = pool.map(process_image_partial, batch)
+            results.extend([result for result in batch_results if result is not None])
+            if not args.skip_failed:
+                failed_images = [image_file for image_file, result in zip(batch, batch_results) if result is None]
+                if failed_images:
+                    print(f"Failed to process: {failed_images}")
+                    break
     
     print(f"\nSuccessfully processed: {len(results)} images")
-    print(f"Failed to process: {len(failed_images)} images")
+    print(f"Failed to process: {len(image_files) - len(results)} images")
     
-    if failed_images:
-        print("Failed images:", failed_images[:10])  # Show first 10 failed images
-        if len(failed_images) > 10:
-            print(f"... and {len(failed_images) - 10} more")
+    if len(image_files) - len(results) > 0:
+        print("Failed images:", [os.path.basename(image_file) for image_file in image_files if process_image(image_file, args.k_clusters, args.resize_max, args.use_gpu) is None][:10])  # Show first 10 failed images
+        if len(image_files) - len(results) > 10:
+            print(f"... and {len(image_files) - len(results) - 10} more")
     
     # Convert results to DataFrame
     if results:
@@ -301,15 +335,15 @@ def main():
         print(df.head(3).to_string())
         
         # Save failed images list if any
-        if failed_images:
+        if len(image_files) - len(results) > 0:
             failed_file = args.output_csv.replace('.csv', '_failed_images.txt')
             with open(failed_file, 'w') as f:
-                f.write('\n'.join(failed_images))
+                f.write('\n'.join([os.path.basename(image_file) for image_file in image_files if process_image(image_file, args.k_clusters, args.resize_max, args.use_gpu) is None]))
             print(f"Failed images list saved: {failed_file}")
         
         # Generate summary statistics
         print(f"\nSummary Statistics:")
-        print(f"  • Success rate: {len(results)/(len(results)+len(failed_images))*100:.1f}%")
+        print(f"  • Success rate: {len(results)/(len(results)+len(image_files)-len(results))*100:.1f}%")
         
     else:
         print("No images were successfully processed")
