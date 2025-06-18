@@ -458,6 +458,7 @@ class FacerSegmentation:
         # Get the colored visualization
         colored_vis = result.get('visualization')
         
+        
         # Get the eyebrow masks
         left_eyebrow_mask = result.get('left_eyebrow_mask')
         right_eyebrow_mask = result.get('right_eyebrow_mask')
