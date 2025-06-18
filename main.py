@@ -8,6 +8,8 @@ import json
 import cv2
 import os
 import io
+import pandas as pd
+from sklearn.cluster import KMeans
 
 from matplotlib.backends.backend_pdf import PdfPages
 from PIL import Image
@@ -160,13 +162,10 @@ def create_method_comparison_grid(left_robust_results, right_robust_results, fac
     left_color_results = left_robust_results.get('color_results', {})
     right_color_results = right_robust_results.get('color_results', {})
     
-    # Expected methods list - only show the 8 working methods
+    # Expected methods list - only show the 5 working methods
     expected_methods = [
         'hsv_method',
         'lab_method', 
-        'edge_method',
-        'gabor_method',
-        'texture_method',
         'tophat_method',
         'outlier_method',
         'percentile_method',
@@ -317,13 +316,10 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
     left_methods = left_robust_results.get('methods_results', {})
     right_methods = right_robust_results.get('methods_results', {})
     
-    # 🆕 Expected methods list to ensure we show only the 8 working methods
+    # 🆕 Expected methods list to ensure we show only the 5 working methods
     expected_methods = [
         'hsv_method',
         'lab_method', 
-        'edge_method',
-        'gabor_method',
-        'texture_method',
         'tophat_method',
         'outlier_method',
         'percentile_method',
@@ -373,7 +369,7 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
         method_success_counts[method_name] = success_count
     
     # Method selector with enhanced info
-    st.subheader("🔧 Method Selection - All 8 Methods")
+    st.subheader("🔧 Method Selection - All 5 Methods")
     
     # Show summary statistics
     total_methods = len(all_methods)
@@ -396,7 +392,7 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
     selected_display_name = st.selectbox(
         "Choose a detection method to analyze:",
         options=list(method_display_names.keys()),
-        help="All 8 methods shown with success indicators. Failed methods will show empty/black masks and diagnostic info.",
+        help="All 5 methods shown with success indicators. Failed methods will show empty/black masks and diagnostic info.",
         key="method_selector"
     )
     
@@ -1270,12 +1266,13 @@ if uploaded_file is not None:
     
     if results:
         # Create tabs for different analyses - 🆕 RESTORED Statistics tab
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "Overview", 
             "Shape Analysis", 
             "🆕 Robust Color Analysis", 
             "Statistics",  # 🆕 RESTORED
-            "🔬 Advanced Debugging"
+            "🔬 Advanced Debugging",
+            "📊 Dataset Analysis"  # 🆕 NEW
         ])
         
         with tab1:
@@ -1367,7 +1364,7 @@ if uploaded_file is not None:
             
             st.markdown("""
             **🚀 Enhanced Analysis Features:**
-            - 🎯 **8 Detection Methods**: HSV Enhanced, LAB Lightness, Hair Edge Detection, Gabor Hair Texture, Texture Variance, Dark Hair Strands (Top-hat), Statistical Outlier Detection, and Darkest 25% (Percentile Thresholding)
+            - 🎯 **5 Detection Methods**: HSV Enhanced, LAB Lightness, Top-hat, Outlier, and Percentile Thresholding
             - 🧠 **Intelligent Fallbacks**: If one method fails, automatically tries alternatives
             - 📊 **Quality Scoring**: Each method gets a quality score based on pixel count, darkness, and coherence
             - 🏆 **Best Method Selection**: Automatically selects the best performing method
@@ -1492,7 +1489,7 @@ if uploaded_file is not None:
             
             st.markdown("""
             **This advanced debugging section provides:**
-            - 📊 **Method Comparison Grid**: See all 8 methods side-by-side like in the debugging script
+            - 📊 **Method Comparison Grid**: See all 5 methods side-by-side like in the debugging script
             - 🎯 **Success/Failure Analysis**: Understand why methods succeed or fail
             - 🔍 **Enlarged Mask View**: "Hand lens" detailed view of detection masks
             - 📈 **Quality Scores**: See which methods perform best for this image (with explanation)
@@ -1512,23 +1509,320 @@ if uploaded_file is not None:
             else:
                 st.error("❌ Advanced debugging not available - robust analysis failed")
 
-
+        with tab6:
+            # 🆕 Dataset Analysis Tab
+            st.header("📊 Interactive Dataset Analysis")
+            
+            st.markdown("""
+            **Upload your batch analysis CSV** to explore eyebrow colors across your entire dataset with:
+            - 🎨 Interactive 3D LAB color space visualization
+            - 🔍 Adjustable K-means clustering
+            - 📸 Click-to-view images (when image folder is provided)
+            - 👁️ Separate analysis for left and right eyebrows
+            """)
+            
+            # File upload for CSV
+            uploaded_csv = st.file_uploader(
+                "Upload batch analysis CSV file", 
+                type=['csv'],
+                help="Upload the CSV file generated by batch_robust_color_analysis.py"
+            )
+            
+            # Optional image folder path
+            image_folder_path = st.text_input(
+                "Image folder path (optional)", 
+                help="Path to the folder containing your dataset images for click-to-view functionality",
+                placeholder="e.g., C:/path/to/your/dataset/"
+            )
+            
+            if uploaded_csv is not None:
+                try:
+                    # Load the CSV data
+                    df = pd.read_csv(uploaded_csv)
+                    st.success(f"✅ Loaded {len(df)} images from CSV")
+                    
+                    # Extract color data for analysis
+                    color_data = []
+                    
+                    for _, row in df.iterrows():
+                        image_name = row['image_filename']
+                        
+                        # Process left eyebrow colors (top 3 methods)
+                        for method_rank in range(1, 4):  # Top 3 methods
+                            method_col = f'left_method_{method_rank}'
+                            if method_col in df.columns and pd.notna(row[method_col]):
+                                for color_idx in range(1, 3):  # 2 colors per method
+                                    l_col = f'left_method_{method_rank}_color{color_idx}_L'
+                                    a_col = f'left_method_{method_rank}_color{color_idx}_a'
+                                    b_col = f'left_method_{method_rank}_color{color_idx}_b'
+                                    pct_col = f'left_method_{method_rank}_color{color_idx}_percentage'
+                                    quality_col = f'left_method_{method_rank}_quality_score'
+                                    
+                                    if all(col in df.columns for col in [l_col, a_col, b_col, pct_col, quality_col]):
+                                        if pd.notna(row[l_col]):
+                                            color_data.append({
+                                                'image': image_name,
+                                                'side': 'left',
+                                                'method': row[method_col],
+                                                'method_rank': method_rank,
+                                                'color_idx': color_idx,
+                                                'L': row[l_col],
+                                                'a': row[a_col],
+                                                'b': row[b_col],
+                                                'percentage': row[pct_col],
+                                                'quality_score': row[quality_col]
+                                            })
+                        
+                        # Process right eyebrow colors (top 3 methods)
+                        for method_rank in range(1, 4):  # Top 3 methods
+                            method_col = f'right_method_{method_rank}'
+                            if method_col in df.columns and pd.notna(row[method_col]):
+                                for color_idx in range(1, 3):  # 2 colors per method
+                                    l_col = f'right_method_{method_rank}_color{color_idx}_L'
+                                    a_col = f'right_method_{method_rank}_color{color_idx}_a'
+                                    b_col = f'right_method_{method_rank}_color{color_idx}_b'
+                                    pct_col = f'right_method_{method_rank}_color{color_idx}_percentage'
+                                    quality_col = f'right_method_{method_rank}_quality_score'
+                                    
+                                    if all(col in df.columns for col in [l_col, a_col, b_col, pct_col, quality_col]):
+                                        if pd.notna(row[l_col]):
+                                            color_data.append({
+                                                'image': image_name,
+                                                'side': 'right',
+                                                'method': row[method_col],
+                                                'method_rank': method_rank,
+                                                'color_idx': color_idx,
+                                                'L': row[l_col],
+                                                'a': row[a_col],
+                                                'b': row[b_col],
+                                                'percentage': row[pct_col],
+                                                'quality_score': row[quality_col]
+                                            })
+                    
+                    if color_data:
+                        color_df = pd.DataFrame(color_data)
+                        st.success(f"✅ Extracted {len(color_df)} color data points")
+                        
+                        # Create tabs for left and right eyebrow analysis
+                        left_tab, right_tab, combined_tab = st.tabs(["👁️ Left Eyebrow", "👁️ Right Eyebrow", "🔄 Combined Analysis"])
+                        
+                        # Function to create interactive plot for a specific side
+                        def create_interactive_plot(data, side_name, tab_container):
+                            with tab_container:
+                                st.subheader(f"{side_name} Eyebrow Analysis")
+                                
+                                # Filter data for this side
+                                side_data = data[data['side'] == side_name.lower()].copy()
+                                
+                                if len(side_data) == 0:
+                                    st.warning(f"No data found for {side_name.lower()} eyebrow")
+                                    return
+                                
+                                # Clustering controls
+                                col1, col2 = st.columns([1, 3])
+                                
+                                with col1:
+                                    n_clusters = st.slider(
+                                        f"Number of clusters ({side_name})", 
+                                        min_value=2, 
+                                        max_value=min(15, len(side_data)), 
+                                        value=8,
+                                        key=f"clusters_{side_name.lower()}"
+                                    )
+                                    
+                                    method_filter = st.selectbox(
+                                        f"Method rank filter ({side_name})",
+                                        options=['All'] + list(range(1, 4)),
+                                        key=f"method_{side_name.lower()}"
+                                    )
+                                
+                                # Filter by method rank if selected
+                                if method_filter != 'All':
+                                    plot_data = side_data[side_data['method_rank'] == method_filter]
+                                else:
+                                    plot_data = side_data
+                                
+                                if len(plot_data) == 0:
+                                    st.warning("No data for selected filters")
+                                    return
+                                
+                                # Perform clustering
+                                color_features = plot_data[['L', 'a', 'b']].values
+                                kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                                clusters = kmeans.fit_predict(color_features)
+                                plot_data = plot_data.copy()
+                                plot_data['cluster'] = clusters
+                                
+                                # Convert LAB to RGB for visualization
+                                def lab_to_rgb(l, a, b):
+                                    lab_color = LabColor(lab_l=l, lab_a=a, lab_b=b) # type: ignore
+                                    rgb_color = convert_color(lab_color, sRGBColor) # type: ignore
+                                    return [int(rgb_color.rgb_r * 255), int(rgb_color.rgb_g * 255), int(rgb_color.rgb_b * 255)]
+                                
+                                plot_data['rgb'] = plot_data.apply(lambda row: lab_to_rgb(row['L'], row['a'], row['b']), axis=1)
+                                plot_data['rgb_str'] = plot_data['rgb'].apply(lambda rgb: f'rgb({rgb[0]}, {rgb[1]}, {rgb[2]})')
+                                
+                                with col2:
+                                    # Create 3D scatter plot
+                                    fig = go.Figure()
+                                    
+                                    # Add points colored by cluster
+                                    for cluster_id in sorted(plot_data['cluster'].unique()):
+                                        cluster_data = plot_data[plot_data['cluster'] == cluster_id]
+                                        
+                                        fig.add_trace(go.Scatter3d(
+                                            x=cluster_data['L'],
+                                            y=cluster_data['a'],
+                                            z=cluster_data['b'],
+                                            mode='markers',
+                                            marker=dict(
+                                                size=8,
+                                                color=cluster_data['rgb_str'],
+                                                opacity=0.8,
+                                                line=dict(width=1, color='black')
+                                            ),
+                                            text=cluster_data.apply(lambda row: 
+                                                f"Image: {row['image']}<br>" +
+                                                f"Method: {row['method']}<br>" +
+                                                f"LAB: ({row['L']:.1f}, {row['a']:.1f}, {row['b']:.1f})<br>" +
+                                                f"Percentage: {row['percentage']:.1f}%<br>" +
+                                                f"Quality: {row['quality_score']:.2f}<br>" +
+                                                f"Cluster: {row['cluster']}", axis=1),
+                                            hovertemplate='%{text}<extra></extra>',
+                                            name=f'Cluster {cluster_id}',
+                                            customdata=cluster_data['image'].values
+                                        ))
+                                    
+                                    fig.update_layout(
+                                        title=f'{side_name} Eyebrow Colors in LAB Space ({n_clusters} clusters)',
+                                        scene=dict(
+                                            xaxis_title='L* (Lightness)',
+                                            yaxis_title='a* (Green-Red)',
+                                            zaxis_title='b* (Blue-Yellow)'
+                                        ),
+                                        height=600
+                                    )
+                                    
+                                    # Display the plot
+                                    selected_points = st.plotly_chart(fig, use_container_width=True, key=f"plot_{side_name.lower()}")
+                                
+                                # Display cluster statistics
+                                st.subheader("Cluster Statistics")
+                                cluster_stats = []
+                                for cluster_id in sorted(plot_data['cluster'].unique()):
+                                    cluster_data = plot_data[plot_data['cluster'] == cluster_id]
+                                    avg_rgb = lab_to_rgb(
+                                        cluster_data['L'].mean(),
+                                        cluster_data['a'].mean(), 
+                                        cluster_data['b'].mean()
+                                    )
+                                    cluster_stats.append({
+                                        'Cluster': cluster_id,
+                                        'Count': len(cluster_data),
+                                        'Avg L': cluster_data['L'].mean(),
+                                        'Avg a': cluster_data['a'].mean(),
+                                        'Avg b': cluster_data['b'].mean(),
+                                        'Avg %': cluster_data['percentage'].mean(),
+                                        'Avg Quality': cluster_data['quality_score'].mean(),
+                                        'RGB': f"rgb({avg_rgb[0]}, {avg_rgb[1]}, {avg_rgb[2]})"
+                                    })
+                                
+                                cluster_df = pd.DataFrame(cluster_stats)
+                                st.dataframe(cluster_df, use_container_width=True)
+                                
+                                # Show color swatches for each cluster
+                                st.subheader("Cluster Color Swatches")
+                                cols = st.columns(min(5, len(cluster_stats)))
+                                for i, (_, cluster_info) in enumerate(cluster_df.iterrows()):
+                                    with cols[i % len(cols)]:
+                                        st.markdown(f"**Cluster {cluster_info['Cluster']}**")
+                                        st.markdown(
+                                            f"<div style='background-color: {cluster_info['RGB']}; "
+                                            f"width: 100%; height: 60px; border: 2px solid #333; "
+                                            f"border-radius: 5px; display: flex; align-items: center; "
+                                            f"justify-content: center; color: white; font-weight: bold; "
+                                            f"text-shadow: 1px 1px 1px rgba(0,0,0,0.8);'>"
+                                            f"{cluster_info['Count']} images</div>", 
+                                            unsafe_allow_html=True
+                                        )
+                                        st.caption(f"Avg: {cluster_info['Avg %']:.1f}%")
+                        
+                        # Create plots for each side
+                        create_interactive_plot(color_df, "Left", left_tab)
+                        create_interactive_plot(color_df, "Right", right_tab)
+                        
+                        # Combined analysis
+                        with combined_tab:
+                            st.subheader("Combined Left & Right Eyebrow Analysis")
+                            
+                            # Method performance comparison
+                            st.subheader("Method Performance Comparison")
+                            method_stats = color_df.groupby(['side', 'method']).agg({
+                                'quality_score': ['mean', 'count'],
+                                'percentage': 'mean'
+                            }).round(2)
+                            
+                            method_stats.columns = ['Avg Quality', 'Count', 'Avg Percentage']
+                            method_stats = method_stats.reset_index()
+                            
+                            fig_methods = px.bar(
+                                method_stats, 
+                                x='method', 
+                                y='Avg Quality', 
+                                color='side',
+                                barmode='group',
+                                title="Average Quality Score by Method and Side",
+                                labels={'method': 'Detection Method', 'Avg Quality': 'Average Quality Score'}
+                            )
+                            st.plotly_chart(fig_methods, use_container_width=True)
+                            
+                            # Side-by-side comparison
+                            st.subheader("Left vs Right Comparison")
+                            comparison_stats = color_df.groupby('side').agg({
+                                'L': 'mean',
+                                'a': 'mean', 
+                                'b': 'mean',
+                                'percentage': 'mean',
+                                'quality_score': 'mean'
+                            }).round(2)
+                            
+                            st.dataframe(comparison_stats, use_container_width=True)
+                    
+                    else:
+                        st.error("❌ No valid color data found in the CSV file")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error loading CSV file: {str(e)}")
+            
+            else:
+                st.info("👆 Upload a CSV file from batch analysis to start exploring your dataset!")
+                
+                # Show example of expected CSV format
+                st.subheader("Expected CSV Format")
+                st.markdown("""
+                The CSV should contain columns like:
+                - `image_filename`
+                - `left_method_1`, `left_method_2`, `left_method_3`
+                - `left_method_1_color1_L`, `left_method_1_color1_a`, `left_method_1_color1_b`, etc.
+                - `right_method_1`, `right_method_2`, `right_method_3`
+                - `right_method_1_color1_L`, `right_method_1_color1_a`, `right_method_1_color1_b`, etc.
+                
+                Generate this CSV using: `python debug_and_batch/batch_robust_color_analysis.py`
+                """)
+                
 # Add information about the app (updated)
 st.sidebar.title("About")
 st.sidebar.info("""
 **🔬 Advanced Eyebrow Analysis App**
 
-This app analyzes eyebrows using **8 robust detection methods**:
+This app analyzes eyebrows using **5 robust detection methods**:
 
 **🎯 Detection Methods:**
 1. HSV Enhanced Detection
 2. LAB Lightness Detection  
-3. Hair Edge Detection
-4. Gabor Hair Texture
-5. Texture Variance Analysis
-6. Dark Hair Strands (Top-hat)
-7. Statistical Outlier Detection
-8. Darkest 25% (Percentile Thresholding)
+3. Top-hat Detection
+4. Outlier Detection
+5. Percentile Thresholding
 
 **📊 Features:**
 - Smart caching (no reprocessing on method selection)
@@ -1549,7 +1843,7 @@ st.sidebar.markdown("""
 3. **View Results**: 
    - **Overview**: Basic face detection
    - **Shape Analysis**: Geometric measurements
-   - **🆕 Robust Analysis**: 8 detection methods with method selector
+   - **🆕 Robust Analysis**: 5 detection methods with method selector
    - **Legacy Analysis**: Single-method approach
    - **Statistics**: Dataset color statistics
    - **🔬 Advanced Debugging**: Method comparison with enlarged masks
@@ -1562,7 +1856,7 @@ st.sidebar.markdown("""
 st.sidebar.title("Technical Notes")
 st.sidebar.markdown("""
 **🔬 Robust Detection Pipeline:**
-- 8 independent detection methods
+- 5 independent detection methods
 - Intelligent fallback strategies
 - Quality scoring (pixel count, darkness, coherence)
 - Automatic best method selection
