@@ -18,7 +18,7 @@ from sklearn.preprocessing import StandardScaler
 import os
 from skimage.feature import local_binary_pattern
 from scipy import ndimage
-
+from sklearn.mixture import GaussianMixture  # Add this import
 # Import metadata handler
 try:
     from utils.metadata_handler import MetadataHandler
@@ -141,7 +141,7 @@ class ColorAnalysis:
         except Exception as e:
             methods_results['hsv_method'] = {'success': False, 'reason': f'HSV error: {e}'}
         
-        # 🎯 METHOD 2: ROBUST LAB (with failure detection)
+        # 🎯 METHOD 2: ROBUST LAB L-CHANNEL (with failure detection)
         try:
             l_channel = lab[:, :, 0]
             a_channel = lab[:, :, 1]
@@ -292,8 +292,8 @@ class ColorAnalysis:
                 methods_results['tophat_method'] = {'success': False, 'reason': 'No dark strands detected'}
         except Exception as e:
             methods_results['tophat_method'] = {'success': False, 'reason': f'Top-hat error: {e}'}
-        
-        # 🎯 FALLBACK METHOD 1: STATISTICAL OUTLIER DETECTION
+
+        # 🎯 METHOD 12: STATISTICAL OUTLIER DETECTION
         try:
             masked_pixels = gray[mask > 0]
             if len(masked_pixels) > 50:
@@ -308,7 +308,7 @@ class ColorAnalysis:
                 if np.sum(outlier_mask) > 15:
                     methods_results['outlier_method'] = {
                         'mask': outlier_mask,
-                        'name': 'Statistical Outliers',
+                        'name': 'Statistical Outlier Detection',
                         'pixel_count': np.sum(outlier_mask),
                         'description': f'Pixels < mean-1.5*std ({outlier_threshold:.0f})',
                         'quality_score': self.calculate_method_quality(outlier_mask, gray, mask),
@@ -321,7 +321,7 @@ class ColorAnalysis:
         except Exception as e:
             methods_results['outlier_method'] = {'success': False, 'reason': f'Outlier error: {e}'}
         
-        # 🎯 FALLBACK METHOD 2: SIMPLE PERCENTILE THRESHOLDING
+        # 🎯 METHOD 13: SIMPLE PERCENTILE THRESHOLDING
         try:
             masked_pixels = gray[mask > 0]
             if len(masked_pixels) > 20:
@@ -345,14 +345,14 @@ class ColorAnalysis:
                 methods_results['percentile_method'] = {'success': False, 'reason': 'Insufficient pixels'}
         except Exception as e:
             methods_results['percentile_method'] = {'success': False, 'reason': f'Percentile error: {e}'}
-        
+
         # 🎯 INTELLIGENT COMBINATION (only use successful methods)
         successful_methods = {k: v for k, v in methods_results.items() if v.get('success', False)}
         
         if len(successful_methods) >= 1:
             # Sort successful methods by quality
             sorted_successful = sorted(successful_methods.items(), 
-                                     key=lambda x: x[1].get('quality_score', 0), reverse=True)
+                                    key=lambda x: x[1].get('quality_score', 0), reverse=True)
             
             if len(sorted_successful) == 1:
                 # Only one method worked, use it
@@ -545,7 +545,6 @@ class ColorAnalysis:
             }
         }
 
-    # Keep all existing methods for backward compatibility
     def extract_eyebrow_hair_pixels_only(self, image, mask, debug=True):
         """
         ORIGINAL method - keeping it exactly as it was working!
@@ -971,8 +970,11 @@ class ColorAnalysis:
             # Duplicate the most common color with slight variation
             dominant_idx = np.argmax(group_percentages)
             dominant_color = groups[dominant_idx]
+            
+            # Create variation
             variation = np.random.randint(-8, 9, size=3)
             new_color = np.clip(dominant_color + variation, 0, 255)
+            
             groups.append(new_color)
             group_percentages.append(5.0)
         
@@ -1242,6 +1244,7 @@ class ColorAnalysis:
             # Convert to LAB using colormath
             rgb_color = sRGBColor(r/255, g/255, b/255)
             lab_color = convert_color(rgb_color, LabColor)
+            lch_color = convert_color(lab_color, LCHabColor)
             
             lab_values.append([
                 lab_color.lab_l,  # L - Lightness # type: ignore

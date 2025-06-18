@@ -44,7 +44,7 @@ if st.sidebar.button("🔄 Clear Cache & Restart Analysis"):
 st.title("🔬 Advanced Eyebrow Analysis App")
 st.markdown("""
 This app analyzes eyebrows in facial images using **multiple robust detection methods** to extract insights about:
-- 🎨 Eyebrow color (using 11 different detection methods)
+- 🎨 Eyebrow color (using 16 different detection methods)
 - 📐 Eyebrow shape and characteristics  
 - 🔬 Detailed debugging and method comparison
 - 📊 Comprehensive visualization of results
@@ -155,13 +155,43 @@ def create_method_comparison_grid(left_robust_results, right_robust_results, fac
     if not left_robust_results or not right_robust_results:
         return None
     
-    left_methods = left_robust_results['methods_results']
-    right_methods = right_robust_results['methods_results']
-    left_color_results = left_robust_results['color_results']
-    right_color_results = right_robust_results['color_results']
+    left_methods = left_robust_results.get('methods_results', {})
+    right_methods = right_robust_results.get('methods_results', {})
+    left_color_results = left_robust_results.get('color_results', {})
+    right_color_results = right_robust_results.get('color_results', {})
     
-    # Get all method names
-    all_methods = set(left_methods.keys()) | set(right_methods.keys())
+    # Expected methods list - only show the 8 working methods
+    expected_methods = [
+        'hsv_method',
+        'lab_method', 
+        'edge_method',
+        'gabor_method',
+        'texture_method',
+        'tophat_method',
+        'outlier_method',
+        'percentile_method',
+        'intelligent_combination'
+    ]
+    
+    # Filter to only show expected methods (exclude removed methods)
+    left_methods = {k: v for k, v in left_methods.items() if k in expected_methods}
+    right_methods = {k: v for k, v in right_methods.items() if k in expected_methods}
+    left_color_results = {k: v for k, v in left_color_results.items() if k in expected_methods}
+    right_color_results = {k: v for k, v in right_color_results.items() if k in expected_methods}
+    
+    # Ensure all expected methods are included (add missing ones as failed)
+    for method in expected_methods:
+        if method not in left_methods:
+            left_methods[method] = {'success': False, 'reason': 'Method not executed', 'name': method.replace('_', ' ').title()}
+        if method not in right_methods:
+            right_methods[method] = {'success': False, 'reason': 'Method not executed', 'name': method.replace('_', ' ').title()}
+        if method not in left_color_results:
+            left_color_results[method] = {}
+        if method not in right_color_results:
+            right_color_results[method] = {}
+    
+    # Get filtered method names
+    all_methods = set(expected_methods)
     method_list = sorted(list(all_methods))
     
     # Create the comparison data
@@ -286,9 +316,8 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
     # Get all available methods (including failed ones)
     left_methods = left_robust_results.get('methods_results', {})
     right_methods = right_robust_results.get('methods_results', {})
-    all_methods = set(left_methods.keys()) | set(right_methods.keys())
     
-    # 🆕 Expected methods list to ensure we show all 11
+    # 🆕 Expected methods list to ensure we show only the 8 working methods
     expected_methods = [
         'hsv_method',
         'lab_method', 
@@ -298,18 +327,22 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
         'tophat_method',
         'outlier_method',
         'percentile_method',
-        'erosion_method',
-        'minimal_method',
         'intelligent_combination'
     ]
     
+    # Filter to only show expected methods (exclude removed methods)
+    all_methods = set(expected_methods)
+    
+    # Filter the method results to only include expected methods
+    left_methods = {k: v for k, v in left_methods.items() if k in expected_methods}
+    right_methods = {k: v for k, v in right_methods.items() if k in expected_methods}
+    
     # Ensure all expected methods are included (add missing ones as failed)
     for method in expected_methods:
-        if method not in all_methods:
-            # Add missing method as failed
+        if method not in left_methods:
             left_methods[method] = {'success': False, 'reason': 'Method not executed', 'name': method.replace('_', ' ').title()}
+        if method not in right_methods:
             right_methods[method] = {'success': False, 'reason': 'Method not executed', 'name': method.replace('_', ' ').title()}
-            all_methods.add(method)
     
     # Create method display names with success indicators
     method_display_names = {}
@@ -340,7 +373,7 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
         method_success_counts[method_name] = success_count
     
     # Method selector with enhanced info
-    st.subheader("🔧 Method Selection - All 11 Methods")
+    st.subheader("🔧 Method Selection - All 8 Methods")
     
     # Show summary statistics
     total_methods = len(all_methods)
@@ -363,7 +396,7 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
     selected_display_name = st.selectbox(
         "Choose a detection method to analyze:",
         options=list(method_display_names.keys()),
-        help="All 11 methods shown with success indicators. Failed methods will show empty/black masks and diagnostic info.",
+        help="All 8 methods shown with success indicators. Failed methods will show empty/black masks and diagnostic info.",
         key="method_selector"
     )
     
@@ -384,6 +417,7 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
         if 'mask' in left_method_data and left_method_data['mask'] is not None:
             mask = left_method_data['mask']
             mask_rgb = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
+            
             # Show mask statistics
             total_pixels = np.sum(mask > 0)
             mask_shape = mask.shape
@@ -429,17 +463,10 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
                     st.write("**Detected Colors:**")
                     for i, (color, pct) in enumerate(zip(colors, percentages)):
                         # Convert to LAB for display
-                        color_bgr = color[::-1]  # RGB to BGR
-                        color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0] # type: ignore
-                        
-                        col_a, col_b = st.columns([1, 3])
-                        with col_a:
-                            hex_color = f'#{color[0]:02x}{color[1]:02x}{color[2]:02x}'
-                            st.markdown(f"<div style='background-color: {hex_color}; width: 100%; height: 50px; border: 1px solid #000;'></div>", unsafe_allow_html=True)
-                        with col_b:
-                            st.write(f"**Color {i+1}:** RGB{tuple(color)} ({pct:.1f}%)")
-                            st.write(f"LAB: L{color_lab[0]} a{color_lab[1]} b{color_lab[2]}")
-                            st.write(f"HEX: {hex_color}")
+                        lab_values = convert_rgb_to_lab_proper(color)
+                        st.write(f"**Color {i+1}:** RGB{tuple(color)} ({pct:.1f}%)")
+                        st.write(f"LAB: L{lab_values['L']} a{lab_values['a']} b{lab_values['b']}")
+                        st.write(f"HEX: #{color[0]:02x}{color[1]:02x}{color[2]:02x}")
             else:
                 st.error(f"❌ Color extraction failed: {left_color_data.get('status', 'Unknown error')}")
         else:
@@ -465,13 +492,7 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
                 """)
                 
                 # Method-specific diagnostics
-                if selected_method == 'erosion_method':
-                    st.write("- **Erosion Method**: May fail if initial mask is too small")
-                    st.write("- **Solution**: Try methods with larger initial detection like 'hsv_method'")
-                elif selected_method == 'minimal_method':
-                    st.write("- **Minimal Method**: Should rarely fail - usually detects bottom 5% of pixels")
-                    st.write("- **If failed**: The eyebrow region might be extremely uniform in color")
-                elif selected_method == 'gabor_method':
+                if selected_method == 'gabor_method':
                     st.write("- **Gabor Method**: Detects hair texture patterns")
                     st.write("- **May fail with**: Very smooth eyebrows or low resolution images")
                 elif selected_method == 'outlier_method':
@@ -540,17 +561,10 @@ def display_method_selector_and_results(left_robust_results, right_robust_result
                     st.write("**Detected Colors:**")
                     for i, (color, pct) in enumerate(zip(colors, percentages)):
                         # Convert to LAB for display
-                        color_bgr = color[::-1]  # RGB to BGR
-                        color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0] # type: ignore
-                        
-                        col_a, col_b = st.columns([1, 3])
-                        with col_a:
-                            hex_color = f'#{color[0]:02x}{color[1]:02x}{color[2]:02x}'
-                            st.markdown(f"<div style='background-color: {hex_color}; width: 100%; height: 50px; border: 1px solid #000;'></div>", unsafe_allow_html=True)
-                        with col_b:
-                            st.write(f"**Color {i+1}:** RGB{tuple(color)} ({pct:.1f}%)")
-                            st.write(f"LAB: L{color_lab[0]} a{color_lab[1]} b{color_lab[2]}")
-                            st.write(f"HEX: {hex_color}")
+                        lab_values = convert_rgb_to_lab_proper(color)
+                        st.write(f"**Color {i+1}:** RGB{tuple(color)} ({pct:.1f}%)")
+                        st.write(f"LAB: L{lab_values['L']} a{lab_values['a']} b{lab_values['b']}")
+                        st.write(f"HEX: #{color[0]:02x}{color[1]:02x}{color[2]:02x}")
             else:
                 st.error(f"❌ Color extraction failed: {right_color_data.get('status', 'Unknown error')}")
         else:
@@ -820,9 +834,8 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                     # Show LAB values
                     if method_info['left_colors'] is not None:
                         for i, (color, pct) in enumerate(zip(method_info['left_colors'], method_info['left_percentages'])):
-                            color_bgr = color[::-1]
-                            color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0] # type: ignore
-                            st.text(f"C{i+1}({pct:.0f}%): L{color_lab[0]} a{color_lab[1]} b{color_lab[2]}")
+                            lab_values = convert_rgb_to_lab_proper(color)
+                            st.text(f"C{i+1}({pct:.0f}%): L{lab_values['L']} a{lab_values['a']} b{lab_values['b']}")
                 else:
                     st.write(f"Colors: {method_info['left_color_status']}")
             
@@ -911,9 +924,8 @@ def display_debugging_grid(left_robust_results, right_robust_results, face_crop)
                     # Show LAB values
                     if method_info['right_colors'] is not None:
                         for i, (color, pct) in enumerate(zip(method_info['right_colors'], method_info['right_percentages'])):
-                            color_bgr = color[::-1]
-                            color_lab = cv2.cvtColor(np.uint8([[color_bgr]]), cv2.COLOR_BGR2LAB)[0][0] # type: ignore
-                            st.text(f"C{i+1}({pct:.0f}%): L{color_lab[0]} a{color_lab[1]} b{color_lab[2]}")
+                            lab_values = convert_rgb_to_lab_proper(color)
+                            st.text(f"C{i+1}({pct:.0f}%): L{lab_values['L']} a{lab_values['a']} b{lab_values['b']}")
                 else:
                     st.write(f"Colors: {method_info['right_color_status']}")
 
@@ -947,62 +959,6 @@ def extract_eyebrow_region(face_crop, eyebrow_mask, padding=10):
         print(f"Error extracting eyebrow region: {e}")
         return None
 
-def extract_eyebrow_region_with_mask(face_crop, detection_mask, padding=10):
-    """Extract detected eyebrow pixels highlighted on original region"""
-    if face_crop is None or detection_mask is None:
-        return None
-    
-    try:
-        # Create a copy of face crop
-        result = face_crop.copy()
-        
-        # Highlight detected pixels in green
-        result[detection_mask > 0] = [0, 255, 0]  # Green for detected hair
-        
-        # Find bounding box and extract region
-        y_indices, x_indices = np.where(detection_mask > 0)
-        if len(y_indices) == 0:
-            return None
-        
-        y_min, y_max = np.min(y_indices), np.max(y_indices)
-        x_min, x_max = np.min(x_indices), np.max(x_indices)
-        
-        # Add padding
-        h, w = face_crop.shape[:2]
-        y_min = max(0, y_min - padding)
-        y_max = min(h, y_max + padding)
-        x_min = max(0, x_min - padding)
-        x_max = min(w, x_max + padding)
-        
-        # Extract region
-        detected_region = result[y_min:y_max, x_min:x_max]
-        return detected_region
-        
-    except Exception as e:
-        print(f"Error extracting detected region: {e}")
-        return None
-
-def create_mask_overlay(face_crop, detection_mask, original_mask):
-    """Create overlay showing original eyebrow (blue) and detection (green)"""
-    if face_crop is None or detection_mask is None:
-        return None
-    
-    try:
-        # Create overlay image
-        overlay = face_crop.copy()
-        
-        # Show original eyebrow region in blue
-        if original_mask is not None:
-            overlay[original_mask > 0] = overlay[original_mask > 0] * 0.7 + np.array([255, 0, 0]) * 0.3
-        
-        # Show detected pixels in green
-        overlay[detection_mask > 0] = overlay[detection_mask > 0] * 0.7 + np.array([0, 255, 0]) * 0.3
-        
-        return overlay
-        
-    except Exception as e:
-        print(f"Error creating overlay: {e}")
-        return None
 
 def analyze_mask_statistics(detection_mask, reference_mask):
     """Analyze mask statistics for detailed comparison"""
@@ -1389,7 +1345,7 @@ if uploaded_file is not None:
             
             st.markdown("""
             **🚀 Enhanced Analysis Features:**
-            - 🎯 **11 Detection Methods**: HSV, LAB, Edge Detection, Gabor Filters, Texture Analysis, Top-hat, Statistical Outliers, Percentile Thresholding, Erosion-based, Minimal Detection, and Intelligent Combination
+            - 🎯 **8 Detection Methods**: HSV Enhanced, LAB Lightness, Hair Edge Detection, Gabor Hair Texture, Texture Variance, Dark Hair Strands (Top-hat), Statistical Outlier Detection, and Darkest 25% (Percentile Thresholding)
             - 🧠 **Intelligent Fallbacks**: If one method fails, automatically tries alternatives
             - 📊 **Quality Scoring**: Each method gets a quality score based on pixel count, darkness, and coherence
             - 🏆 **Best Method Selection**: Automatically selects the best performing method
@@ -1514,7 +1470,7 @@ if uploaded_file is not None:
             
             st.markdown("""
             **This advanced debugging section provides:**
-            - 📊 **Method Comparison Grid**: See all 11 methods side-by-side like in the debugging script
+            - 📊 **Method Comparison Grid**: See all 8 methods side-by-side like in the debugging script
             - 🎯 **Success/Failure Analysis**: Understand why methods succeed or fail
             - 🔍 **Enlarged Mask View**: "Hand lens" detailed view of detection masks
             - 📈 **Quality Scores**: See which methods perform best for this image (with explanation)
@@ -1540,20 +1496,17 @@ st.sidebar.title("About")
 st.sidebar.info("""
 **🔬 Advanced Eyebrow Analysis App**
 
-This app analyzes eyebrows using **11 robust detection methods**:
+This app analyzes eyebrows using **8 robust detection methods**:
 
 **🎯 Detection Methods:**
-1. HSV Color Space Analysis
+1. HSV Enhanced Detection
 2. LAB Lightness Detection  
-3. Edge Detection (Canny)
-4. Gabor Filter Banks
+3. Hair Edge Detection
+4. Gabor Hair Texture
 5. Texture Variance Analysis
-6. Morphological Top-hat
+6. Dark Hair Strands (Top-hat)
 7. Statistical Outlier Detection
-8. Percentile Thresholding
-9. Erosion-based Detection
-10. Minimal Detection
-11. Intelligent Combination
+8. Darkest 25% (Percentile Thresholding)
 
 **📊 Features:**
 - Smart caching (no reprocessing on method selection)
@@ -1574,7 +1527,7 @@ st.sidebar.markdown("""
 3. **View Results**: 
    - **Overview**: Basic face detection
    - **Shape Analysis**: Geometric measurements
-   - **🆕 Robust Analysis**: 11 detection methods with method selector
+   - **🆕 Robust Analysis**: 8 detection methods with method selector
    - **Legacy Analysis**: Single-method approach
    - **Statistics**: Dataset color statistics
    - **🔬 Advanced Debugging**: Method comparison with enlarged masks
@@ -1587,7 +1540,7 @@ st.sidebar.markdown("""
 st.sidebar.title("Technical Notes")
 st.sidebar.markdown("""
 **🔬 Robust Detection Pipeline:**
-- 11 independent detection methods
+- 8 independent detection methods
 - Intelligent fallback strategies
 - Quality scoring (pixel count, darkness, coherence)
 - Automatic best method selection
