@@ -323,7 +323,7 @@ class EyebrowColorAnalyzer:
         )
         
         # 3. Cluster distribution by side
-        cluster_side = rank1_colors.groupby(['cluster', 'side']).size().reset_index(name='count')
+        cluster_side = rank1_colors.groupby(['cluster', 'side']).size().reset_index(name='count') # type: ignore
         for side in ['left', 'right']:
             side_data = cluster_side[cluster_side['side'] == side]
             fig.add_trace(
