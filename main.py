@@ -1666,7 +1666,7 @@ if uploaded_file is not None:
                                 def lab_to_rgb(l, a, b):
                                     lab_color = LabColor(lab_l=l, lab_a=a, lab_b=b) # type: ignore
                                     rgb_color = convert_color(lab_color, sRGBColor) # type: ignore
-                                    return [int(rgb_color.rgb_r * 255), int(rgb_color.rgb_g * 255), int(rgb_color.rgb_b * 255)]
+                                    return [int(rgb_color.rgb_r * 255), int(rgb_color.rgb_g * 255), int(rgb_color.rgb_b * 255)] # type: ignore
                                 
                                 plot_data['rgb'] = plot_data.apply(lambda row: lab_to_rgb(row['L'], row['a'], row['b']), axis=1)
                                 plot_data['rgb_str'] = plot_data['rgb'].apply(lambda rgb: f'rgb({rgb[0]}, {rgb[1]}, {rgb[2]})')
