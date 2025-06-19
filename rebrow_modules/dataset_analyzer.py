@@ -275,42 +275,47 @@ def render():
                         # Get best method results only
                         best_methods_df = filtered_df.loc[filtered_df.groupby(['image', 'side'])['quality_score'].idxmax()]
                         
-                        # 3D LAB scatter plot
-                        st.subheader("📊 3D LAB Color Space Distribution")
-                        fig_3d = go.Figure()
+                        # 3D LAB scatter plots (separate for left and right)
+                        st.subheader("📈 3D LAB Color Space Distribution")
                         
-                        for tone in selected_skin_tones:
-                            for side in ['left', 'right']:
-                                tone_data = best_methods_df[
-                                    (best_methods_df['eval_cluster'] == tone) &
-                                    (best_methods_df['side'] == side)
-                                ]
+                        # Create two columns for side-by-side plots
+                        col1, col2 = st.columns(2)
+                        
+                        for side, col in zip(['left', 'right'], [col1, col2]):
+                            with col:
+                                fig_3d = go.Figure()
                                 
-                                fig_3d.add_trace(go.Scatter3d(
-                                    x=tone_data['L'],
-                                    y=tone_data['a'],
-                                    z=tone_data['b'],
-                                    mode='markers',
-                                    name=f"Skin Tone {tone} ({side})",
-                                    marker=dict(
-                                        size=5,
-                                        opacity=0.7
+                                for tone in selected_skin_tones:
+                                    tone_data = best_methods_df[
+                                        (best_methods_df['eval_cluster'] == tone) &
+                                        (best_methods_df['side'] == side)
+                                    ]
+                                    
+                                    fig_3d.add_trace(go.Scatter3d(
+                                        x=tone_data['L'],
+                                        y=tone_data['a'],
+                                        z=tone_data['b'],
+                                        mode='markers',
+                                        name=f"Skin Tone {tone}",
+                                        marker=dict(
+                                            size=5,
+                                            opacity=0.7
+                                        ),
+                                        text=[f"Method: {m}<br>Quality: {q:.1f}" 
+                                              for m, q in zip(tone_data['method'], tone_data['quality_score'])]
+                                    ))
+                                
+                                fig_3d.update_layout(
+                                    scene=dict(
+                                        xaxis_title='L* (Lightness)',
+                                        yaxis_title='a* (Green-Red)',
+                                        zaxis_title='b* (Blue-Yellow)'
                                     ),
-                                    text=[f"Method: {m}<br>Quality: {q:.1f}" 
-                                          for m, q in zip(tone_data['method'], tone_data['quality_score'])]
-                                ))
-                        
-                        fig_3d.update_layout(
-                            scene=dict(
-                                xaxis_title='L* (Lightness)',
-                                yaxis_title='a* (Green-Red)',
-                                zaxis_title='b* (Blue-Yellow)'
-                            ),
-                            title="LAB Color Space Distribution by Side",
-                            legend_title="Group"
-                        )
-                        
-                        st.plotly_chart(fig_3d, key="lab_3d_plot", use_container_width=True)
+                                    title=f"LAB Color Space Distribution - {side.capitalize()} Eyebrow",
+                                    legend_title="Skin Tone"
+                                )
+                                
+                                st.plotly_chart(fig_3d, key=f"lab_3d_plot_{side}", use_container_width=True)
                         
                         # LAB value distributions
                         st.subheader("📈 LAB Value Distributions")
@@ -347,16 +352,6 @@ def render():
                             title="Distribution of Best Performing Methods"
                         )
                         st.plotly_chart(fig_methods, key="method_dist_plot", use_container_width=True)
-                        st.dataframe(lab_stats, use_container_width=True)
-                            
-                            # Method distribution
-                        st.markdown("### 🏆 Best Performing Methods")
-                        method_dist = best_methods_df['method'].value_counts()
-                        fig_methods = px.pie(
-                                values=method_dist.values,
-                                names=method_dist.index,
-                                title="Distribution of Best Performing Methods"
-                        )
                         st.plotly_chart(fig_methods, use_container_width=True)
                     else:
                         st.warning("No data available for the selected filters. Please adjust your selection.")
