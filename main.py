@@ -10,6 +10,8 @@ import os
 import io
 import pandas as pd
 from sklearn.cluster import KMeans
+from colormath.color_objects import sRGBColor, LabColor
+from colormath.color_conversions import convert_color
 
 from matplotlib.backends.backend_pdf import PdfPages
 from PIL import Image
@@ -1541,6 +1543,9 @@ if uploaded_file is not None:
                     df = pd.read_csv(uploaded_csv)
                     st.success(f"✅ Loaded {len(df)} images from CSV")
                     
+                    # Show first few columns to debug
+                    st.write("**CSV Columns Preview:**", df.columns.tolist()[:10])
+                    
                     # Extract color data for analysis
                     color_data = []
                     
@@ -1549,14 +1554,14 @@ if uploaded_file is not None:
                         
                         # Process left eyebrow colors (top 3 methods)
                         for method_rank in range(1, 4):  # Top 3 methods
-                            method_col = f'left_method_{method_rank}'
+                            method_col = f'left_top_method{method_rank}'  # 🔧 FIXED: removed underscore
                             if method_col in df.columns and pd.notna(row[method_col]):
                                 for color_idx in range(1, 3):  # 2 colors per method
-                                    l_col = f'left_method_{method_rank}_color{color_idx}_L'
-                                    a_col = f'left_method_{method_rank}_color{color_idx}_a'
-                                    b_col = f'left_method_{method_rank}_color{color_idx}_b'
-                                    pct_col = f'left_method_{method_rank}_color{color_idx}_percentage'
-                                    quality_col = f'left_method_{method_rank}_quality_score'
+                                    l_col = f'left_top_method{method_rank}_color{color_idx}_L'  # 🔧 FIXED
+                                    a_col = f'left_top_method{method_rank}_color{color_idx}_a'  # 🔧 FIXED
+                                    b_col = f'left_top_method{method_rank}_color{color_idx}_b'  # 🔧 FIXED
+                                    pct_col = f'left_top_method{method_rank}_color{color_idx}_percentage'  # 🔧 FIXED
+                                    quality_col = f'left_top_method{method_rank}_quality_score'  # 🔧 FIXED
                                     
                                     if all(col in df.columns for col in [l_col, a_col, b_col, pct_col, quality_col]):
                                         if pd.notna(row[l_col]):
@@ -1575,14 +1580,14 @@ if uploaded_file is not None:
                         
                         # Process right eyebrow colors (top 3 methods)
                         for method_rank in range(1, 4):  # Top 3 methods
-                            method_col = f'right_method_{method_rank}'
+                            method_col = f'right_top_method{method_rank}'  # 🔧 FIXED: removed underscore
                             if method_col in df.columns and pd.notna(row[method_col]):
                                 for color_idx in range(1, 3):  # 2 colors per method
-                                    l_col = f'right_method_{method_rank}_color{color_idx}_L'
-                                    a_col = f'right_method_{method_rank}_color{color_idx}_a'
-                                    b_col = f'right_method_{method_rank}_color{color_idx}_b'
-                                    pct_col = f'right_method_{method_rank}_color{color_idx}_percentage'
-                                    quality_col = f'right_method_{method_rank}_quality_score'
+                                    l_col = f'right_top_method{method_rank}_color{color_idx}_L'  # 🔧 FIXED
+                                    a_col = f'right_top_method{method_rank}_color{color_idx}_a'  # 🔧 FIXED
+                                    b_col = f'right_top_method{method_rank}_color{color_idx}_b'  # 🔧 FIXED
+                                    pct_col = f'right_top_method{method_rank}_color{color_idx}_percentage'  # 🔧 FIXED
+                                    quality_col = f'right_top_method{method_rank}_quality_score'  # 🔧 FIXED
                                     
                                     if all(col in df.columns for col in [l_col, a_col, b_col, pct_col, quality_col]):
                                         if pd.notna(row[l_col]):
@@ -1602,6 +1607,10 @@ if uploaded_file is not None:
                     if color_data:
                         color_df = pd.DataFrame(color_data)
                         st.success(f"✅ Extracted {len(color_df)} color data points")
+                        
+                        # Show sample of extracted data for debugging
+                        st.write("**Sample extracted data:**")
+                        st.dataframe(color_df.head())
                         
                         # Create tabs for left and right eyebrow analysis
                         left_tab, right_tab, combined_tab = st.tabs(["👁️ Left Eyebrow", "👁️ Right Eyebrow", "🔄 Combined Analysis"])
@@ -1791,8 +1800,33 @@ if uploaded_file is not None:
                     else:
                         st.error("❌ No valid color data found in the CSV file")
                         
+                        # Debug information
+                        st.write("**Debug: Looking for these columns:**")
+                        expected_cols = []
+                        for side in ['left', 'right']:
+                            for method_rank in range(1, 4):
+                                expected_cols.append(f'{side}_top_method{method_rank}')
+                                for color_idx in range(1, 3):
+                                    expected_cols.extend([
+                                        f'{side}_top_method{method_rank}_color{color_idx}_L',
+                                        f'{side}_top_method{method_rank}_color{color_idx}_a',
+                                        f'{side}_top_method{method_rank}_color{color_idx}_b',
+                                        f'{side}_top_method{method_rank}_color{color_idx}_percentage'
+                                    ])
+                        
+                        st.write("Expected columns:", expected_cols[:10], "...")
+                        st.write("Actual columns:", df.columns.tolist()[:10], "...")
+                        
+                        # Show missing columns
+                        missing_cols = [col for col in expected_cols if col not in df.columns]
+                        if missing_cols:
+                            st.write("**Missing columns:**", missing_cols[:10])
+                        
                 except Exception as e:
                     st.error(f"❌ Error loading CSV file: {str(e)}")
+                    import traceback
+                    st.write("**Full error:**")
+                    st.code(traceback.format_exc())
             
             else:
                 st.info("👆 Upload a CSV file from batch analysis to start exploring your dataset!")
@@ -1802,13 +1836,14 @@ if uploaded_file is not None:
                 st.markdown("""
                 The CSV should contain columns like:
                 - `image_filename`
-                - `left_method_1`, `left_method_2`, `left_method_3`
-                - `left_method_1_color1_L`, `left_method_1_color1_a`, `left_method_1_color1_b`, etc.
-                - `right_method_1`, `right_method_2`, `right_method_3`
-                - `right_method_1_color1_L`, `right_method_1_color1_a`, `right_method_1_color1_b`, etc.
+                - `left_top_method1`, `left_top_method2`, `left_top_method3`
+                - `left_top_method1_color1_L`, `left_top_method1_color1_a`, `left_top_method1_color1_b`, etc.
+                - `right_top_method1`, `right_top_method2`, `right_top_method3`
+                - `right_top_method1_color1_L`, `right_top_method1_color1_a`, `right_top_method1_color1_b`, etc.
                 
                 Generate this CSV using: `python debug_and_batch/batch_robust_color_analysis.py`
                 """)
+
                 
 # Add information about the app (updated)
 st.sidebar.title("About")
