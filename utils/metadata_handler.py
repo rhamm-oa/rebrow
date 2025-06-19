@@ -3,7 +3,7 @@ import pandas as pd
 import os
 
 class MetadataHandler:
-    def __init__(self, csv_path="data/MCB_DATA_MERGED.csv"):
+    def __init__(self, csv_path="data/mcb_data/MCB_DATA_MERGED.csv"):
         """
         Initialize the metadata handler with the CSV file containing ethnicity and other data.
         """

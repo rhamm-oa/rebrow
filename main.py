@@ -78,7 +78,7 @@ def initialize_modules():
     """Initialize all modules once and cache them"""
     face_detector = FaceDetector()
     eyebrow_segmentation = EyebrowSegmentation()
-    color_analyzer = ColorAnalysis(metadata_csv_path="data/MCB_DATA_MERGED.csv")
+    color_analyzer = ColorAnalysis(metadata_csv_path="data/mcb_data/MCB_DATA_MERGED.csv")
     shape_analyzer = ShapeAnalysis()
     facer_segmenter = FacerSegmentation()
     eyebrow_stats = EyebrowStatistics()
